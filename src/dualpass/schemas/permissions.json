@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "dualpass permissions config",
+  "type": "object",
+  "required": ["default_posture", "mutating_actions_require_approval"],
+  "additionalProperties": false,
+  "properties": {
+    "default_posture": {
+      "type": "string",
+      "enum": ["ask", "auto-accept-safe", "plan-only", "bypass"]
+    },
+    "mutating_actions_require_approval": { "type": "boolean" },
+    "opt_in_skips": {
+      "type": "object",
+      "additionalProperties": { "type": "boolean" }
+    },
+    "forbidden_actions": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": { "type": "string", "minLength": 1 }
+      }
+    },
+    "audit_log": { "type": "string", "minLength": 1 }
+  }
+}

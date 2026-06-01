@@ -1,4 +1,4 @@
-"""Smoke tests for the v0.1.0a0 scaffolding.
+"""Smoke tests for the v0.1.0a1 scaffolding.
 
 These tests verify the package imports cleanly, the CLI argparse surface is sane,
 and stub commands emit the expected NotImplementedError signal. They do NOT exercise
@@ -20,7 +20,7 @@ from dualpass.cli import main
 
 
 def test_version_constant_is_pep440_prerelease() -> None:
-    assert dualpass.__version__ == "0.1.0a0"
+    assert dualpass.__version__ == "0.1.0a1"
 
 
 def test_top_level_exports() -> None:
@@ -57,19 +57,17 @@ def test_no_args_prints_help_and_exits_zero() -> None:
     assert "dualpass" in buf.getvalue()
 
 
-# ── Stub behavior ──────────────────────────────────────────────────────────────
+# ── Stub behavior (commands not yet implemented in v0.1.0a1) ──────────────────
 
 
 @pytest.mark.parametrize(
     "argv,expected_msg_fragment",
     [
         (["run", "--unit", "demo-001"], "'run' is not yet implemented"),
-        (["doctor"], "'doctor' is not yet implemented"),
         (["init", "/tmp/x"], "'init' is not yet implemented"),
         (["status"], "'status' is not yet implemented"),
         (["retro", "--unit", "demo-001"], "'retro' is not yet implemented"),
         (["propose-dag"], "'propose-dag' is not yet implemented"),
-        (["config", "validate"], "'config' is not yet implemented"),
     ],
 )
 def test_stub_commands_exit_two_with_structured_message(
@@ -80,7 +78,7 @@ def test_stub_commands_exit_two_with_structured_message(
         rc = main(argv)
     assert rc == 2
     assert expected_msg_fragment in err.getvalue()
-    assert "v0.1.0a0" in err.getvalue()  # mentions current version
+    assert dualpass.__version__ in err.getvalue()  # mentions current version
     assert "CHANGELOG" in err.getvalue()  # points at the milestone tracker
 
 

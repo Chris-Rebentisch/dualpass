@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "dualpass project config",
+  "type": "object",
+  "required": [
+    "version",
+    "project_name",
+    "unit_id_pattern",
+    "max_revision_rounds",
+    "breakpoints",
+    "circuit_breaker",
+    "single_flight_lockfile",
+    "auto_lock_finals"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "version": {
+      "type": "string",
+      "description": "Config schema version. Must match a release dualpass understands."
+    },
+    "project_name": { "type": "string", "minLength": 1 },
+    "unit_id_pattern": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Pattern template for unit IDs (e.g. '<slug>', 'chunk-<n>')."
+    },
+    "max_revision_rounds": {
+      "type": "object",
+      "required": ["default"],
+      "properties": {
+        "default": { "type": "integer", "minimum": 1, "maximum": 50 }
+      },
+      "additionalProperties": { "type": "integer", "minimum": 1, "maximum": 50 }
+    },
+    "breakpoints": {
+      "type": "object",
+      "additionalProperties": { "type": "boolean" }
+    },
+    "circuit_breaker": {
+      "type": "object",
+      "required": ["max_no_progress_relaunches", "progress_signal"],
+      "additionalProperties": false,
+      "properties": {
+        "max_no_progress_relaunches": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20
+        },
+        "progress_signal": {
+          "type": "string",
+          "enum": ["build_marker_hash", "test_count", "artifact_count"]
+        }
+      }
+    },
+    "single_flight_lockfile": { "type": "boolean" },
+    "auto_lock_finals": { "type": "boolean" }
+  }
+}
