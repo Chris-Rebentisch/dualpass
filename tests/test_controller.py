@@ -297,10 +297,13 @@ def test_run_unit_works_with_live_provider_against_fake_clis(scaffolded_project:
     )
     assert rc == 0
     udir = units_dir(scaffolded_project, "demo-live")
-    # The author's stdout should land in the artifact, with the dualpass header.
+    # The author's stdout should land in the artifact body (clean — v1.0.4
+    # moved diagnostic info to a .meta.json sidecar).
     body = (udir / "research-artifact-v1.md").read_text()
     assert "body from author" in body
-    assert "dualpass-served-by: author" in body
+    assert "dualpass-served-by" not in body
+    sidecar = json.loads((udir / "research-artifact-v1.meta.json").read_text())
+    assert sidecar["served_by"] == "author"
     # The reviewer's stdout should land in the review.
     review = (udir / "research-review-v1.md").read_text()
     assert "Verdict: approved" in review

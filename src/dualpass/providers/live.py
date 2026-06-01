@@ -347,32 +347,85 @@ class LiveProvider(Provider):
 # ── Artifact framing ─────────────────────────────────────────────────────────
 
 
+# v1.0.4: match ONE OR MORE consecutive header triplets (claude sometimes
+# inlines a second copy of the header in its own output during revision rounds,
+# treating the on-disk diagnostic preamble as part of the artifact structure).
+# A single regex match now consumes the entire stack so prepend-fresh leaves
+# exactly one header (during the deprecated inline-header path) or zero
+# (during the v1.0.4+ sidecar path).
 _DIAGNOSTIC_HEADER_RE = re.compile(
-    r"^<!-- dualpass-served-by:.*?-->\n"
+    r"^(?:<!-- dualpass-served-by:.*?-->\n"
     r"<!-- dualpass-attempts:.*?-->\n"
-    r"<!-- dualpass-returncode:.*?-->\n",
+    r"<!-- dualpass-returncode:.*?-->\n)+",
     re.DOTALL,
 )
 
+# v1.0.4: strip claude's narration preamble between the start of the file
+# and the YAML frontmatter opener. Only applied when frontmatter is present —
+# stages using H1 + bold-prefix headers (outline/spec/prompt/audit/handoff
+# in the bundled v1.0.3 config) legitimately start with prose.
+_FRONTMATTER_OPEN_RE = re.compile(r"^---\s*\n", re.MULTILINE)
 
-def _diagnostic_header(outcome: _Outcome) -> str:
-    return (
-        f"<!-- dualpass-served-by: {outcome.served_by} -->\n"
-        f"<!-- dualpass-attempts: {outcome.attempts} -->\n"
-        f"<!-- dualpass-returncode: {outcome.returncode} -->\n"
+
+def _meta_sidecar_path(artifact_path: Path) -> Path:
+    """Return the meta-sidecar path for an artifact (v1.0.4).
+
+    `<dir>/<stage>-artifact-v<N>.md` → `<dir>/<stage>-artifact-v<N>.meta.json`
+    `<dir>/<stage>-review-v<N>-a.md` → `<dir>/<stage>-review-v<N>-a.meta.json`
+    """
+    return artifact_path.with_suffix(".meta.json")
+
+
+def _write_meta_sidecar(artifact_path: Path, outcome: _Outcome) -> None:
+    """Write subprocess diagnostics next to the artifact (v1.0.4).
+
+    Replaces v1.0.2's HTML-comment header inside the artifact body. Keeping
+    harness metadata out of the file the agent sees prevents the recursive
+    reproduction loop where claude (during revision rounds) treats the
+    diagnostic header as part of the artifact structure and stuffs additional
+    copies into its own output.
+    """
+    payload = {
+        "served_by": outcome.served_by,
+        "attempts": outcome.attempts,
+        "returncode": outcome.returncode,
+    }
+    _meta_sidecar_path(artifact_path).write_text(
+        json.dumps(payload, indent=2) + "\n", encoding="utf-8"
     )
 
 
-def _with_diagnostic_header(outcome: _Outcome) -> str:
-    """Prepend a small diagnostic header so the artifact file is auditable.
+def _sanitize_artifact_body(text: str) -> str:
+    """Strip harness noise from an agent's artifact output (v1.0.4).
 
-    Unwraps a Claude/Cursor `--output-format json` envelope when present:
-    if stdout parses as a JSON object with a string `result` field, the
-    `.result` content is written instead of the raw envelope. Direct port
-    of `parse_json_stdout` + `extract_cli_payload` in run_pipeline.py:684-743.
+    Three sanitization passes, in order:
+
+    1. **JSON envelope unwrap.** If the entire payload is a Claude/Cursor
+       `--output-format json` envelope (object with string `result` field),
+       extract `.result`. Mirrors `parse_json_stdout` + `extract_cli_payload`
+       in the source pipeline at run_pipeline.py:684-743.
+    2. **Diagnostic header strip.** Remove one or more stacked
+       `<!-- dualpass-served-by ... -->` triplets at the top. Backward-compat
+       with v1.0.2/v1.0.3 artifacts that carry the header inline. v1.0.4+
+       artifacts won't have them (sidecar instead) but agent revisions may
+       reintroduce them when claude reads + rewrites an existing artifact.
+    3. **Preamble strip.** If a `---` frontmatter line exists in the body,
+       discard everything before it (after the header strip in step 2). This
+       catches the narrate-before-structure pattern that claude reliably
+       exhibits across revision rounds even when the gate feedback names it
+       directly. Stages without YAML frontmatter (H1+bold-line shape) keep
+       their leading prose unchanged.
     """
-    body = _unwrap_json_envelope(outcome.stdout)
-    return _diagnostic_header(outcome) + body
+    # Strip diagnostic headers FIRST so a JSON envelope hidden behind them
+    # (the v1.0.1-bug-on-disk case) is reachable by the unwrap that follows.
+    text = _DIAGNOSTIC_HEADER_RE.sub("", text, count=1)
+    text = _unwrap_json_envelope(text)
+    # Strip preamble prose only when the body has YAML frontmatter — for
+    # H1+bold-line stages, prose at the top is the artifact.
+    fm_match = _FRONTMATTER_OPEN_RE.search(text)
+    if fm_match and fm_match.start() > 0:
+        text = text[fm_match.start():]
+    return text
 
 
 def _unwrap_json_envelope(text: str) -> str:
@@ -402,22 +455,28 @@ def _unwrap_json_envelope(text: str) -> str:
     return text
 
 
-def _resolve_artifact_path(
-    expected: Path, outcome: _Outcome
-) -> None:
-    """File-on-disk-first artifact resolution (v1.0.2).
+def _resolve_artifact_path(expected: Path, outcome: _Outcome) -> None:
+    """File-on-disk-first artifact resolution (v1.0.2; v1.0.4 sidecar metadata).
 
-    If the agent's own tools created the expected artifact file on disk,
-    preserve it: prepend the diagnostic header to its existing content.
-    Otherwise, write the agent's stdout (with diagnostic header + envelope
-    unwrap) as the artifact body. Direct port of GrACE's
-    `infer_latest_stage_artifact` semantics from run_pipeline.py:773-800:
-    the orchestrator does not dictate where artifacts come from; it accepts
-    whichever source actually produced one.
+    Two-source artifact resolution, in order:
 
-    Idempotency: if the on-disk file already starts with a dualpass
-    diagnostic header (e.g. from a prior run that crashed mid-write), the
-    existing header is stripped before the new one is prepended.
+    1. **File on disk.** If the agent's Write tool populated the expected
+       artifact path, that file IS the artifact. Mirrors
+       `infer_latest_stage_artifact` in the source pipeline (run_pipeline.py:773).
+    2. **Stdout fallback.** If no file appeared, the agent streamed markdown
+       to stdout. Use that.
+
+    Both sources are sanitized by `_sanitize_artifact_body` (JSON envelope
+    unwrap, diagnostic-header strip, preamble strip). v1.0.4 writes the
+    artifact body as PURE MARKDOWN — diagnostic info goes to a `.meta.json`
+    sidecar via `_write_meta_sidecar`. Keeping harness metadata out of the
+    artifact body prevents agents from treating the header as part of the
+    artifact structure and reproducing it during revision rounds (the
+    failure mode observed in v1.0.3 chunk-77a live testing).
+
+    Backward compatibility: artifacts created by v1.0.0–v1.0.3 carry the
+    diagnostic header inline. `_sanitize_artifact_body` strips them so a
+    mid-revision upgrade from an earlier version works without loss.
     """
     on_disk = ""
     if expected.exists():
@@ -426,19 +485,10 @@ def _resolve_artifact_path(
         except OSError:
             on_disk = ""
 
-    on_disk_meaningful = bool(on_disk.strip())
-    if on_disk_meaningful:
-        stripped_existing = _DIAGNOSTIC_HEADER_RE.sub("", on_disk, count=1)
-        # Also unwrap if the file content is itself a JSON envelope —
-        # happens when a prior run wrote stdout-as-artifact verbatim.
-        unwrapped = _unwrap_json_envelope(stripped_existing)
-        expected.write_text(
-            _diagnostic_header(outcome) + unwrapped, encoding="utf-8"
-        )
-        return
-
-    # No file on disk (or empty): use the stdout-as-artifact path.
-    expected.write_text(_with_diagnostic_header(outcome), encoding="utf-8")
+    source = on_disk if on_disk.strip() else outcome.stdout
+    body = _sanitize_artifact_body(source)
+    expected.write_text(body, encoding="utf-8")
+    _write_meta_sidecar(expected, outcome)
 
 
 _VERDICT_APPROVED_RE = re.compile(

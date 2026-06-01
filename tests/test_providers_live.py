@@ -8,6 +8,7 @@ LLM or shipping a real network dependency.
 
 from __future__ import annotations
 
+import json
 import os
 import stat
 import textwrap
@@ -158,7 +159,12 @@ def test_invoke_author_runs_subprocess_and_writes_artifact(tmp_path: Path) -> No
     result = provider.invoke_author(ctx)
     body = result.artifact_path.read_text()
     assert "## Stage Output" in body
-    assert "dualpass-served-by: author" in body
+    # v1.0.4: diagnostic info goes to a .meta.json sidecar, not the artifact body
+    assert "dualpass-served-by" not in body
+    sidecar = result.artifact_path.with_suffix(".meta.json")
+    assert sidecar.is_file()
+    meta = json.loads(sidecar.read_text())
+    assert meta["served_by"] == "author"
     assert result.extras["attempts"] == 1
     assert result.extras["returncode"] == 0
 
@@ -350,7 +356,8 @@ def test_transient_retry_gives_up_after_max_attempts(tmp_path: Path) -> None:
 # ── Missing CLI / timeout ────────────────────────────────────────────────────
 
 
-def test_missing_cli_returns_127_in_diagnostic_header(tmp_path: Path) -> None:
+def test_missing_cli_returns_127_in_sidecar(tmp_path: Path) -> None:
+    """v1.0.4: diagnostic returncode now lives in the .meta.json sidecar."""
     cfg = AgentsConfig(
         roles={
             "author": AgentRole(
@@ -362,12 +369,12 @@ def test_missing_cli_returns_127_in_diagnostic_header(tmp_path: Path) -> None:
     provider = LiveProvider(cfg)
     ctx = _ctx(tmp_path)
     result = provider.invoke_author(ctx)
-    body = result.artifact_path.read_text()
-    assert "dualpass-returncode: 127" in body
+    meta = json.loads(result.artifact_path.with_suffix(".meta.json").read_text())
+    assert meta["returncode"] == 127
 
 
-def test_subprocess_timeout_surfaces_in_artifact(tmp_path: Path) -> None:
-    """A subprocess that runs past timeout_seconds is killed and returncode is 124."""
+def test_subprocess_timeout_surfaces_in_sidecar(tmp_path: Path) -> None:
+    """A subprocess that runs past timeout_seconds is killed and returncode 124 lands in the sidecar."""
     if os.name != "posix":
         pytest.skip("timeout assertion uses POSIX sleep semantics")
     slow = _make_executable(tmp_path / "slow.sh", "sleep 5\n")
@@ -380,8 +387,8 @@ def test_subprocess_timeout_surfaces_in_artifact(tmp_path: Path) -> None:
     provider = LiveProvider(cfg)
     ctx = _ctx(tmp_path)
     result = provider.invoke_author(ctx)
-    body = result.artifact_path.read_text()
-    assert "dualpass-returncode: 124" in body
+    meta = json.loads(result.artifact_path.with_suffix(".meta.json").read_text())
+    assert meta["returncode"] == 124
 
 
 # ── v1.0.2 — file-on-disk-first, JSON envelope unwrap, verdict-from-disk ─────
@@ -426,15 +433,20 @@ def test_unwrap_json_envelope_handles_leading_whitespace() -> None:
 
 def test_resolve_artifact_path_uses_file_on_disk_when_present(tmp_path: Path) -> None:
     """v1.0.2: if the agent wrote a file via its own Write tool, that file
-    wins. We just prepend the diagnostic header."""
+    wins. v1.0.4: artifact body is pure markdown; meta in sidecar."""
     expected = tmp_path / "research-artifact-v1.md"
     expected.write_text("---\ntitle: real\n---\n\n# Body the agent wrote", encoding="utf-8")
     outcome = _outcome_stub(stdout="this was the stdout summary, not the artifact")
     _resolve_artifact_path(expected, outcome)
     body = expected.read_text()
-    assert body.startswith("<!-- dualpass-served-by:")
+    assert body.startswith("---")
     assert "# Body the agent wrote" in body
     assert "this was the stdout summary" not in body
+    assert "dualpass-served-by" not in body
+    sidecar = expected.with_suffix(".meta.json")
+    assert sidecar.is_file()
+    meta = json.loads(sidecar.read_text())
+    assert meta["served_by"] == "author"
 
 
 def test_resolve_artifact_path_falls_back_to_stdout_when_no_file(tmp_path: Path) -> None:
@@ -448,7 +460,7 @@ def test_resolve_artifact_path_falls_back_to_stdout_when_no_file(tmp_path: Path)
 
 def test_resolve_artifact_path_unwraps_json_envelope_already_on_disk(tmp_path: Path) -> None:
     """If a previous run wrote a JSON envelope to disk (the v1.0.1 bug),
-    unwrap it on the next pass instead of doubling up."""
+    unwrap it on the next pass. v1.0.4: zero inline headers; meta in sidecar."""
     expected = tmp_path / "research-artifact-v1.md"
     envelope = (
         '<!-- dualpass-served-by: author -->\n'
@@ -461,8 +473,81 @@ def test_resolve_artifact_path_unwraps_json_envelope_already_on_disk(tmp_path: P
     _resolve_artifact_path(expected, outcome)
     body = expected.read_text()
     assert "# Real body" in body
-    # Exactly one diagnostic header (not two stacked).
-    assert body.count("<!-- dualpass-served-by:") == 1
+    # v1.0.4: no inline diagnostic headers at all — sidecar only.
+    assert "dualpass-served-by" not in body
+    assert body.startswith("---")
+
+
+def test_resolve_artifact_path_strips_stacked_diagnostic_headers(tmp_path: Path) -> None:
+    """v1.0.4: an artifact carrying multiple stacked diagnostic-header triplets
+    (the v1.0.3 chunk-77a-v103 spec-stage failure mode where claude included
+    additional copies in its own output during revision rounds) gets all of
+    them stripped, not just the first."""
+    expected = tmp_path / "spec-artifact-v6.md"
+    stacked = (
+        '<!-- dualpass-served-by: author -->\n'
+        '<!-- dualpass-attempts: 1 -->\n'
+        '<!-- dualpass-returncode: 0 -->\n'
+        '<!-- dualpass-served-by: author -->\n'
+        '<!-- dualpass-attempts: 1 -->\n'
+        '<!-- dualpass-returncode: 0 -->\n'
+        '---\n'
+        'title: spec\n'
+        '---\n\n'
+        '# Body\n'
+    )
+    expected.write_text(stacked, encoding="utf-8")
+    outcome = _outcome_stub(stdout="ignored")
+    _resolve_artifact_path(expected, outcome)
+    body = expected.read_text()
+    assert "dualpass-served-by" not in body
+    assert body.startswith("---")
+    assert "# Body" in body
+
+
+def test_resolve_artifact_path_strips_preamble_before_frontmatter(tmp_path: Path) -> None:
+    """v1.0.4: claude's narration preamble between header location and
+    frontmatter is stripped — the chunk-77a-v103 spec-stage round-1-through-5
+    failure mode where claude couldn't override its narration instinct round
+    over round even when the gate feedback named it directly."""
+    expected = tmp_path / "outline-artifact-v1.md"
+    with_preamble = (
+        '<!-- dualpass-served-by: author -->\n'
+        '<!-- dualpass-attempts: 1 -->\n'
+        '<!-- dualpass-returncode: 0 -->\n'
+        'Now I have all the context. Let me produce the outline.\n\n'
+        '---\n'
+        'title: outline\n'
+        '---\n\n'
+        '# Body\n'
+    )
+    expected.write_text(with_preamble, encoding="utf-8")
+    outcome = _outcome_stub(stdout="ignored")
+    _resolve_artifact_path(expected, outcome)
+    body = expected.read_text()
+    assert "Now I have all the context" not in body
+    assert body.startswith("---")
+
+
+def test_resolve_artifact_path_leaves_h1_bold_artifacts_untouched(tmp_path: Path) -> None:
+    """v1.0.4: stages using H1 + bold-prefix metadata (outline/spec/prompt/
+    audit/handoff per the v1.0.3 bundled config) have no YAML frontmatter
+    delimiter, so the preamble-strip should NOT activate — every line is
+    legitimate artifact content."""
+    expected = tmp_path / "outline-artifact-v1.md"
+    h1_bold = (
+        '# Chunk 77a Outline — Image-OCR Ingestion\n\n'
+        '**Phase:** 9\n'
+        '**Module:** Discovery\n\n'
+        '## 1. Some section\n'
+    )
+    expected.write_text(h1_bold, encoding="utf-8")
+    outcome = _outcome_stub(stdout="ignored")
+    _resolve_artifact_path(expected, outcome)
+    body = expected.read_text()
+    # All content preserved verbatim — no `---` to anchor a strip.
+    assert body.startswith("# Chunk 77a Outline")
+    assert "**Phase:** 9" in body
 
 
 def test_resolve_artifact_path_treats_empty_file_as_no_file(tmp_path: Path) -> None:
@@ -511,5 +596,7 @@ def test_invoke_author_preserves_agent_written_file(tmp_path: Path) -> None:
     body = result.artifact_path.read_text()
     assert "Body the agent wrote with its own Write tool" in body
     assert "Wrote artifact. Status complete." not in body
-    # Exactly one diagnostic header.
-    assert body.count("<!-- dualpass-served-by:") == 1
+    # v1.0.4: artifact body is pure markdown; no inline diagnostic headers.
+    assert "dualpass-served-by" not in body
+    sidecar = result.artifact_path.with_suffix(".meta.json")
+    assert sidecar.is_file()

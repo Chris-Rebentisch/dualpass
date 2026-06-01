@@ -13,6 +13,28 @@ Possible future work (open to feedback):
 - PWD halt-and-remediate and cumulative-count cascade as enforced built-in gates (currently inherited at the doctrine level only)
 - Disk-unblock polling for hung cursor-agent reviewer subprocesses (mirrors `run_subprocess_with_reviewer_disk_unblock` in the source pipeline). v1.0.2 reads the verdict from the on-disk review file, so a hung subprocess doesn't lose the verdict — but it does still tie up the slot until timeout. A polling-and-terminate pattern would shorten that window.
 
+## [1.0.4] — 2026-06-01
+
+A second live-provider dogfood run against the chunk-77 scope brief surfaced the next layer of friction: the v1.0.2 diagnostic header (three HTML comment lines prepended to every artifact) was visible to claude during revision rounds. Claude read its previous artifact (with the header), treated the header as part of the artifact structure, and reproduced extra copies in its own Write-tool output. The v1.0.2 strip-one-prepend-one logic couldn't keep up: after each revision round the file accumulated more diagnostic-header triplets, the reviewer correctly rejected on the duplicate-preamble defect, and spec stage ran 7+ rounds before max_rounds halted without converging. The author IS iterating responsibly — cursor's substantive design-severity findings WERE getting addressed — but the harness was reintroducing the same mechanical fault each round.
+
+### Changed
+
+- **`src/dualpass/providers/live.py`** — `_resolve_artifact_path` now writes the artifact body as pure markdown and routes diagnostic info (`served_by`, `attempts`, `returncode`) to a `<stage>-artifact-v<N>.meta.json` sidecar via the new `_write_meta_sidecar` helper. Keeping harness metadata out of the file the agent sees prevents the recursive reproduction loop.
+- **`_sanitize_artifact_body`** is the new shared sanitization helper. Three passes in order: (1) strip one OR MORE consecutive diagnostic-header triplets at the top (the v1.0.3 stacking bug — `_DIAGNOSTIC_HEADER_RE` now uses `(triplet)+` instead of single-triplet); (2) JSON envelope unwrap (mirrors `parse_json_stdout` + `extract_cli_payload`); (3) preamble strip — when YAML frontmatter is present, discard prose between start-of-file and the first `---` line (the v1.0.3 narrate-before-structure pattern claude couldn't override even when the gate feedback named it). H1+bold-line artifacts have no `---` anchor, so their leading prose is the artifact and stays untouched.
+
+### Added
+
+- `_meta_sidecar_path()`, `_write_meta_sidecar()`, `_sanitize_artifact_body()` helpers in `src/dualpass/providers/live.py`.
+- 4 new tests covering: stacked-header strip, preamble strip, H1+bold-line passthrough, sidecar materialization. Existing inline-header assertions migrated to sidecar.
+
+### Migration
+
+Backward compatible. Artifacts from v1.0.0–v1.0.3 carry the diagnostic header inline; v1.0.4 reads them via the strip-on-load path and rewrites in the new clean shape on the next revision round. No data loss. The `.meta.json` sidecar files are additive — old projects don't have them yet, new revisions will create them.
+
+### Tests
+
+224 → 227 passing.
+
 ## [1.0.3] — 2026-06-01
 
 A second live-provider dogfood test surfaced an architectural mismatch in the bundled gate stack: v1.0.2's `check-frontmatter` gate fired on every stage, but real LLM authors (claude in particular) reliably produce YAML frontmatter only on a subset of artifact shapes. On outline / spec / prompt / audit / handoff, claude's narrative instinct emits a preamble paragraph before any structured block, which makes a `\A---` frontmatter check unsatisfiable even when the artifact body is otherwise correct. The frontmatter gate is fine; the bundled default just enforced it on stages where the proven production pattern doesn't.
