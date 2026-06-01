@@ -55,17 +55,19 @@ Two audiences, one v1:
 | Sandbox / permissions | `config/permissions.yaml` — tiered, opt-in autonomy |
 | Observability | `.dualpass-state/logs/` + structured event log + `dualpass status` |
 
-## Quick start (planned — not yet functional)
+## Quick start
 
 ```bash
 git clone https://github.com/Chris-Rebentisch/dualpass && cd dualpass
-uv sync
+pip install -e .
 dualpass doctor                    # probe environment
-dualpass init my-project --example coding-agent
+dualpass init my-project           # scaffold a new project
 cd my-project
-dualpass run --unit demo-001 --provider mock
+dualpass run --unit demo-001 --provider mock --ignore-breakpoints
 dualpass status --unit demo-001
 ```
+
+`--provider mock` runs the full 7-stage chain end-to-end without calling any real LLM — useful for verifying the harness works before pointing it at `claude` + `cursor-agent` for live runs.
 
 See [docs/RUNBOOK.md](docs/RUNBOOK.md) for the full first-boot walkthrough.
 
