@@ -178,10 +178,10 @@ def test_run_unit_halts_when_max_rounds_exhausted(scaffolded_project: Path) -> N
 
     original = providers.get_provider
 
-    def scripted(name: str):
+    def scripted(name: str, *, agents_config=None):
         if name == "mock":
             return MockProvider(scripts={"research": MockScript(review_verdicts=["rejected"])})
-        return original(name)
+        return original(name, agents_config=agents_config)
 
     providers.get_provider = scripted  # type: ignore[assignment]
     try:
@@ -241,6 +241,56 @@ def test_cli_run_pauses_at_breakpoint_by_default(scaffolded_project: Path) -> No
         )
     assert rc == 0
     assert "paused before stage 'code'" in out.getvalue()
+
+
+def test_run_unit_works_with_live_provider_against_fake_clis(scaffolded_project: Path) -> None:
+    """End-to-end: rewrite agents.yaml to point at fake shell scripts and run live.
+
+    Exercises the same path real `claude` / `cursor-agent` calls would take —
+    just with deterministic stdout instead of a network roundtrip.
+    """
+    import stat
+    import textwrap
+
+    # Drop two tiny shell scripts the harness will shell out to.
+    bin_dir = scaffolded_project / "bin"
+    bin_dir.mkdir()
+    author_path = bin_dir / "fake-author.sh"
+    author_path.write_text("#!/bin/sh\nprintf '# stage output\n\nbody from author\n'\n")
+    author_path.chmod(author_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    reviewer_path = bin_dir / "fake-reviewer.sh"
+    reviewer_path.write_text("#!/bin/sh\nprintf 'Looks fine.\n\nVerdict: approved\n'\n")
+    reviewer_path.chmod(reviewer_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+    # Point agents.yaml at the scripts.
+    agents_yaml = scaffolded_project / "config" / "agents.yaml"
+    agents_yaml.write_text(
+        textwrap.dedent(f"""\
+            roles:
+              author:
+                command: "{author_path} {{prompt}}"
+                timeout_seconds: 15
+              reviewer:
+                command: "{reviewer_path} {{prompt}}"
+                timeout_seconds: 15
+        """)
+    )
+
+    rc = controller.run_unit(
+        "demo-live",
+        provider="live",
+        project_root=scaffolded_project,
+        ignore_breakpoints=True,
+    )
+    assert rc == 0
+    udir = units_dir(scaffolded_project, "demo-live")
+    # The author's stdout should land in the artifact, with the dualpass header.
+    body = (udir / "research-artifact-v1.md").read_text()
+    assert "body from author" in body
+    assert "dualpass-served-by: author" in body
+    # The reviewer's stdout should land in the review.
+    review = (udir / "research-review-v1.md").read_text()
+    assert "Verdict: approved" in review
 
 
 def test_event_log_file_is_jsonl(scaffolded_project: Path) -> None:

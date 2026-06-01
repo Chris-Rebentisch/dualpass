@@ -95,8 +95,9 @@ def test_get_provider_resolves_mock_and_rejects_unknown() -> None:
         get_provider("does-not-exist")
 
 
-def test_get_provider_live_raises_notimplemented_with_helpful_message() -> None:
+def test_get_provider_live_requires_agents_config() -> None:
+    """As of v0.2.0a2 the live provider exists; it needs agents_config to wire up CLIs."""
     from dualpass.providers import get_provider
 
-    with pytest.raises(NotImplementedError, match="live provider"):
+    with pytest.raises(ValueError, match="requires agents_config"):
         get_provider("live")

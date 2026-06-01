@@ -125,8 +125,8 @@ def run_unit(
     emit(Event("lockfile_acquired", unit=unit_id), project_root=root)
 
     try:
-        provider_impl = providers.get_provider(provider)
-    except NotImplementedError as exc:
+        provider_impl = providers.get_provider(provider, agents_config=cfg.agents)
+    except (NotImplementedError, providers.LiveProviderError, ValueError) as exc:
         release_lock(unit_id, root)
         emit(Event("lockfile_released", unit=unit_id), project_root=root)
         print(f"controller: {exc}", file=sys.stderr)

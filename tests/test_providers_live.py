@@ -1,0 +1,381 @@
+"""Tests for the LiveProvider — subprocess-based author + reviewer with fallback.
+
+These tests use tiny shell scripts as stand-ins for `claude` and `cursor-agent`.
+That lets us exercise every code path (success, transient retry, exhaustion
+fallback, timeout, missing CLI, verdict parsing) without ever calling a real
+LLM or shipping a real network dependency.
+"""
+
+from __future__ import annotations
+
+import os
+import stat
+import textwrap
+from pathlib import Path
+
+import pytest
+
+from dualpass.config import AgentRole, AgentsConfig, StageConfig
+from dualpass.providers import LiveProvider, LiveProviderError
+from dualpass.providers.base import AuthorResult, StageContext
+from dualpass.providers.live import (
+    build_author_prompt,
+    build_reviewer_prompt,
+    parse_verdict,
+)
+
+# ── Test scaffolding ──────────────────────────────────────────────────────────
+
+
+def _make_executable(script_path: Path, body: str) -> Path:
+    """Write a shell script + chmod +x. Returns the path."""
+    script_path.write_text("#!/bin/sh\n" + textwrap.dedent(body).lstrip())
+    script_path.chmod(script_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    return script_path
+
+
+def _ctx(tmp_path: Path, stage_name: str = "research", round_number: int = 1) -> StageContext:
+    units = tmp_path / "units"
+    units.mkdir(parents=True, exist_ok=True)
+    return StageContext(
+        unit_id="demo-001",
+        stage=StageConfig(
+            name=stage_name,
+            author_skill=f"skills/{stage_name}/SKILL.md",
+            reviewer_skill=f"skills/{stage_name}/REVIEWER.md",
+        ),
+        round_number=round_number,
+        units_dir=units,
+        project_root=tmp_path,
+    )
+
+
+def _roles(*, author_cmd: str, reviewer_cmd: str, fallback_cmd: str | None = None) -> AgentsConfig:
+    roles = {
+        "author": AgentRole(name="author", command=author_cmd, timeout_seconds=15),
+        "reviewer": AgentRole(
+            name="reviewer",
+            command=reviewer_cmd,
+            timeout_seconds=15,
+            exhaustion_patterns=("[resource_exhausted]",),
+        ),
+    }
+    if fallback_cmd:
+        roles["reviewer_fallback"] = AgentRole(
+            name="reviewer_fallback",
+            command=fallback_cmd,
+            timeout_seconds=15,
+            activate_after_consecutive_exhausted=2,
+        )
+    return AgentsConfig(roles=roles)
+
+
+# ── Prompt building ───────────────────────────────────────────────────────────
+
+
+def test_build_author_prompt_includes_skill_unit_round(tmp_path: Path) -> None:
+    ctx = _ctx(tmp_path, "spec", 3)
+    skill = tmp_path / "skills" / "spec" / "SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_text("AUTHOR-SKILL-CONTENT")
+    prompt = build_author_prompt(ctx)
+    assert "AUTHOR-SKILL-CONTENT" in prompt
+    assert "'spec'" in prompt
+    assert "'demo-001'" in prompt
+    assert "round 3" in prompt
+
+
+def test_build_author_prompt_with_missing_skill_falls_back_to_empty(tmp_path: Path) -> None:
+    """Missing skill file is a warning, not a crash."""
+    ctx = _ctx(tmp_path, "outline", 1)
+    prompt = build_author_prompt(ctx)
+    assert "outline" in prompt  # task block still present
+
+
+def test_build_reviewer_prompt_embeds_artifact(tmp_path: Path) -> None:
+    ctx = _ctx(tmp_path)
+    artifact_path = ctx.units_dir / "research-artifact-v1.md"
+    artifact_path.write_text("ARTIFACT-BODY-HERE")
+    artifact = AuthorResult(artifact_path=artifact_path, served_by="x")
+    prompt = build_reviewer_prompt(ctx, artifact)
+    assert "ARTIFACT-BODY-HERE" in prompt
+    assert "Verdict: approved" in prompt  # the contract is in the prompt
+
+
+# ── Verdict parsing ───────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("blah blah\nVerdict: approved", "approved"),
+        ("Verdict: rejected", "rejected"),
+        ("Verdict: blocked\n", "blocked"),
+        ("notes\n\nVerdict: APPROVED with caveats", "approved"),
+        # No verdict line → default to blocked (conservative).
+        ("no verdict here", "blocked"),
+        # Multiple verdicts — last one wins (so a reviewer that walks through
+        # 'this looks rejected' then concludes 'Verdict: approved' is accepted).
+        ("Verdict: rejected\nactually wait\nVerdict: approved", "approved"),
+    ],
+)
+def test_parse_verdict_recognizes_valid_lines(text: str, expected: str) -> None:
+    assert parse_verdict(text) == expected
+
+
+# ── LiveProvider init guards ─────────────────────────────────────────────────
+
+
+def test_constructor_raises_when_author_role_missing() -> None:
+    cfg = AgentsConfig(roles={"reviewer": AgentRole(name="reviewer", command="true")})
+    with pytest.raises(LiveProviderError, match="author"):
+        LiveProvider(cfg)
+
+
+def test_constructor_raises_when_reviewer_role_missing() -> None:
+    cfg = AgentsConfig(roles={"author": AgentRole(name="author", command="true")})
+    with pytest.raises(LiveProviderError, match="reviewer"):
+        LiveProvider(cfg)
+
+
+# ── End-to-end author + reviewer with fake CLIs ──────────────────────────────
+
+
+def test_invoke_author_runs_subprocess_and_writes_artifact(tmp_path: Path) -> None:
+    fake_author = _make_executable(
+        tmp_path / "fake-author.sh",
+        """
+        # Echo a fixed response so we can verify capture worked.
+        printf "## Stage Output\n\nThis is the synthesized output.\n"
+        """,
+    )
+    cfg = _roles(author_cmd=str(fake_author), reviewer_cmd="true")
+    provider = LiveProvider(cfg)
+    ctx = _ctx(tmp_path)
+    result = provider.invoke_author(ctx)
+    body = result.artifact_path.read_text()
+    assert "## Stage Output" in body
+    assert "dualpass-served-by: author" in body
+    assert result.extras["attempts"] == 1
+    assert result.extras["returncode"] == 0
+
+
+def test_invoke_reviewer_parses_verdict_from_real_subprocess(tmp_path: Path) -> None:
+    fake_reviewer = _make_executable(
+        tmp_path / "fake-reviewer.sh",
+        """
+        printf "Looks fine to me.\n\nVerdict: approved\n"
+        """,
+    )
+    cfg = _roles(author_cmd="true", reviewer_cmd=str(fake_reviewer))
+    provider = LiveProvider(cfg)
+    ctx = _ctx(tmp_path)
+    artifact_path = ctx.units_dir / "research-artifact-v1.md"
+    artifact_path.write_text("something to review")
+    artifact = AuthorResult(artifact_path=artifact_path, served_by="author")
+    review = provider.invoke_reviewer(ctx, artifact)
+    assert review.verdict == "approved"
+    assert review.served_by == "reviewer"
+
+
+def test_reviewer_unrecognizable_output_defaults_to_blocked(tmp_path: Path) -> None:
+    fake_reviewer = _make_executable(
+        tmp_path / "no-verdict.sh", "printf 'I forgot to write a verdict line.\n'"
+    )
+    cfg = _roles(author_cmd="true", reviewer_cmd=str(fake_reviewer))
+    provider = LiveProvider(cfg)
+    ctx = _ctx(tmp_path)
+    artifact_path = ctx.units_dir / "research-artifact-v1.md"
+    artifact_path.write_text("body")
+    artifact = AuthorResult(artifact_path=artifact_path, served_by="author")
+    review = provider.invoke_reviewer(ctx, artifact)
+    assert review.verdict == "blocked"
+
+
+# ── Cross-vendor fallback ────────────────────────────────────────────────────
+
+
+def test_reviewer_falls_back_after_consecutive_exhaustion(tmp_path: Path) -> None:
+    """Primary returns [resource_exhausted] twice in a row → fallback activates on attempt 3."""
+    primary = _make_executable(
+        tmp_path / "primary.sh",
+        """
+        # Primary always reports exhaustion.
+        printf "[resource_exhausted]\n"
+        exit 0
+        """,
+    )
+    fallback = _make_executable(
+        tmp_path / "fallback.sh",
+        """
+        printf "Verdict: approved\n"
+        """,
+    )
+    cfg = _roles(
+        author_cmd="true",
+        reviewer_cmd=str(primary),
+        fallback_cmd=str(fallback),
+    )
+    # activate_after_consecutive_exhausted is set to 2 by _roles when fallback_cmd is given.
+    provider = LiveProvider(cfg)
+
+    # Three rounds. The first two hit the primary (both report exhaustion); on the
+    # third call the streak (2) meets the threshold (2), so we route to fallback.
+    served = []
+    verdicts = []
+    for round_number in (1, 2, 3):
+        ctx = _ctx(tmp_path, "research", round_number)
+        artifact_path = ctx.units_dir / f"research-artifact-v{round_number}.md"
+        artifact_path.write_text("body")
+        artifact = AuthorResult(artifact_path=artifact_path, served_by="author")
+        review = provider.invoke_reviewer(ctx, artifact)
+        served.append(review.served_by)
+        verdicts.append(review.verdict)
+
+    assert served == ["reviewer", "reviewer", "reviewer_fallback"]
+    # Primary returned no verdict → blocked; fallback gave approved.
+    assert verdicts == ["blocked", "blocked", "approved"]
+
+
+def test_reviewer_exhaustion_streak_resets_on_clean_response(tmp_path: Path) -> None:
+    """If primary alternates exhaustion / success, streak should reset and fallback never trip."""
+    flip_file = tmp_path / "flip.txt"
+    flip_file.write_text("0")
+    flip_script = _make_executable(
+        tmp_path / "flip.sh",
+        f"""
+        count=$(cat {flip_file})
+        if [ "$count" = "0" ]; then
+          printf "[resource_exhausted]\n"
+          echo "1" > {flip_file}
+        else
+          printf "Verdict: approved\n"
+          echo "0" > {flip_file}
+        fi
+        """,
+    )
+    fallback = _make_executable(tmp_path / "fallback.sh", "printf 'Verdict: approved\n'")
+    cfg = _roles(
+        author_cmd="true",
+        reviewer_cmd=str(flip_script),
+        fallback_cmd=str(fallback),
+    )
+    provider = LiveProvider(cfg)
+
+    served = []
+    for round_number in (1, 2, 3, 4):
+        ctx = _ctx(tmp_path, "research", round_number)
+        artifact_path = ctx.units_dir / f"research-artifact-v{round_number}.md"
+        artifact_path.write_text("body")
+        artifact = AuthorResult(artifact_path=artifact_path, served_by="author")
+        review = provider.invoke_reviewer(ctx, artifact)
+        served.append(review.served_by)
+    # Should never have hit the fallback — streak resets each clean response.
+    assert all(s == "reviewer" for s in served), served
+
+
+# ── Transient retry ──────────────────────────────────────────────────────────
+
+
+def test_transient_retry_eventually_succeeds(tmp_path: Path) -> None:
+    counter_file = tmp_path / "counter.txt"
+    counter_file.write_text("0")
+    script = _make_executable(
+        tmp_path / "retry.sh",
+        f"""
+        count=$(cat {counter_file})
+        next=$((count + 1))
+        echo "$next" > {counter_file}
+        if [ "$count" -lt "2" ]; then
+          printf "ETIMEDOUT transient hiccup\n" >&2
+          exit 1
+        fi
+        printf "success-on-attempt-$next\n"
+        """,
+    )
+    cfg = AgentsConfig(
+        roles={
+            "author": AgentRole(
+                name="author",
+                command=str(script),
+                timeout_seconds=10,
+                transient_retries=3,
+                transient_retry_delay_seconds=0,
+                transient_retry_patterns=("ETIMEDOUT",),
+            ),
+            "reviewer": AgentRole(name="reviewer", command="true"),
+        }
+    )
+    provider = LiveProvider(cfg)
+    ctx = _ctx(tmp_path)
+    result = provider.invoke_author(ctx)
+    body = result.artifact_path.read_text()
+    assert "success-on-attempt-3" in body
+    assert result.extras["attempts"] == 3
+
+
+def test_transient_retry_gives_up_after_max_attempts(tmp_path: Path) -> None:
+    """If every attempt matches the transient pattern, we surface the failure."""
+    always_fail = _make_executable(
+        tmp_path / "always.sh",
+        """
+        printf "ETIMEDOUT every time\n" >&2
+        exit 1
+        """,
+    )
+    cfg = AgentsConfig(
+        roles={
+            "author": AgentRole(
+                name="author",
+                command=str(always_fail),
+                timeout_seconds=5,
+                transient_retries=2,
+                transient_retry_delay_seconds=0,
+                transient_retry_patterns=("ETIMEDOUT",),
+            ),
+            "reviewer": AgentRole(name="reviewer", command="true"),
+        }
+    )
+    provider = LiveProvider(cfg)
+    ctx = _ctx(tmp_path)
+    result = provider.invoke_author(ctx)
+    # Attempts = transient_retries + 1.
+    assert result.extras["attempts"] == 3
+    assert result.extras["returncode"] != 0
+
+
+# ── Missing CLI / timeout ────────────────────────────────────────────────────
+
+
+def test_missing_cli_returns_127_in_diagnostic_header(tmp_path: Path) -> None:
+    cfg = AgentsConfig(
+        roles={
+            "author": AgentRole(
+                name="author", command="/this/binary/definitely/does/not/exist", timeout_seconds=2
+            ),
+            "reviewer": AgentRole(name="reviewer", command="true"),
+        }
+    )
+    provider = LiveProvider(cfg)
+    ctx = _ctx(tmp_path)
+    result = provider.invoke_author(ctx)
+    body = result.artifact_path.read_text()
+    assert "dualpass-returncode: 127" in body
+
+
+def test_subprocess_timeout_surfaces_in_artifact(tmp_path: Path) -> None:
+    """A subprocess that runs past timeout_seconds is killed and returncode is 124."""
+    if os.name != "posix":
+        pytest.skip("timeout assertion uses POSIX sleep semantics")
+    slow = _make_executable(tmp_path / "slow.sh", "sleep 5\n")
+    cfg = AgentsConfig(
+        roles={
+            "author": AgentRole(name="author", command=str(slow), timeout_seconds=1),
+            "reviewer": AgentRole(name="reviewer", command="true"),
+        }
+    )
+    provider = LiveProvider(cfg)
+    ctx = _ctx(tmp_path)
+    result = provider.invoke_author(ctx)
+    body = result.artifact_path.read_text()
+    assert "dualpass-returncode: 124" in body

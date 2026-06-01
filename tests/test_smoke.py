@@ -21,7 +21,7 @@ from dualpass.cli import main
 
 
 def test_version_constant_is_pep440_prerelease() -> None:
-    assert dualpass.__version__ == "0.2.0a1"
+    assert dualpass.__version__ == "0.2.0a2"
 
 
 def test_top_level_exports() -> None:

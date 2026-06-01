@@ -11,6 +11,8 @@ lands in a later milestone.
 
 from __future__ import annotations
 
+from dualpass.config import AgentsConfig
+
 from .base import (
     AuthorResult,
     Provider,
@@ -18,23 +20,32 @@ from .base import (
     ReviewVerdict,
     StageContext,
 )
+from .live import LiveProvider, LiveProviderError
 from .mock import MockProvider, MockScript
 
 
-def get_provider(name: str) -> Provider:
-    """Resolve a provider by name. Raises NotImplementedError for unknown names."""
+def get_provider(name: str, *, agents_config: AgentsConfig | None = None) -> Provider:
+    """Resolve a provider by name.
+
+    The `live` provider needs `agents_config` to know which CLIs to spawn;
+    `mock` ignores it.
+    """
     if name == "mock":
         return MockProvider()
     if name == "live":
-        raise NotImplementedError(
-            "the live provider (real subprocess agent invocations) is not yet implemented — "
-            "use --provider mock for now, or watch CHANGELOG.md for the milestone"
-        )
+        if agents_config is None:
+            raise ValueError(
+                "the 'live' provider requires agents_config — load it from "
+                "config/agents.yaml before calling get_provider"
+            )
+        return LiveProvider(agents_config)
     raise ValueError(f"unknown provider: {name!r}")
 
 
 __all__ = [
     "AuthorResult",
+    "LiveProvider",
+    "LiveProviderError",
     "MockProvider",
     "MockScript",
     "Provider",

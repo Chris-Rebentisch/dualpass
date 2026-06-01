@@ -6,13 +6,27 @@ All notable changes to dualpass are documented here. Format follows [Keep a Chan
 
 ### Planned for 0.1.0 (v1)
 
-- Live (subprocess-based) provider for real `claude` + `cursor-agent` invocations
-- Dual-pass reviewer with cross-vendor fallback (D479-style)
-- Three background watchers (research-complete → outline, prompt-drafts, handoff-finals) with §6.10-style PID-parsing fix and split-parent/lockfile guards
+- Three background watchers with real fs-watching loop
 - Circuit breaker (no-progress detection across consecutive failed rounds)
-- Auto-relaunch on transient errors
 - `dualpass status`, `retro`, `propose-dag` commands
-- Anthropic skill format for stage skills
+
+## [0.2.0a2] — 2026-06-01
+
+### Added — the headline feature
+
+- **`dualpass run --provider live` is now functional.** Real subprocess-based author + reviewer invocations against whatever CLIs `config/agents.yaml` points at (`claude`, `cursor-agent`, `codex`, anything that accepts `-p <prompt>`).
+- **Cross-vendor reviewer fallback.** When the primary reviewer returns output matching any of its configured `exhaustion_patterns` (default `[resource_exhausted]`) for `activate_after_consecutive_exhausted` consecutive calls, the harness transparently swaps to the `reviewer_fallback` role — usually a different vendor — so review never silently drops. The exhaustion streak resets on any clean response, so a flapping primary doesn't permanently get demoted.
+- **Transient retry.** Each role can declare `transient_retry_patterns` (e.g. `ETIMEDOUT`, `[unavailable]`) and a bounded `transient_retries` count. The harness retries the same role on those patterns before counting them toward exhaustion.
+- **Verdict parsing.** Reviewer responses are scanned for a final `Verdict: approved | rejected | blocked` line. Unrecognizable responses default to `blocked` (the conservative choice — forces operator review).
+- **Stage-skill injection.** The harness reads `skills/<stage>/SKILL.md` and `skills/<stage>/REVIEWER.md`, wraps each in a `<skill>` block, and embeds them in the author / reviewer prompts. A missing skill file logs a warning and proceeds with an empty skill (the LLM still has the stage name and unit ID).
+- **Injection-safe command templates.** `command:` strings in `agents.yaml` are `shlex.split` and `{prompt}` placeholders replaced with the prompt as a single argv element. No shell interpretation, no string concatenation.
+- **Diagnostic artifact headers.** Every artifact and review file written by `LiveProvider` carries three HTML comments at the top: `dualpass-served-by`, `dualpass-attempts`, `dualpass-returncode`. Makes failures auditable without reading event logs.
+- 22 new tests + 1 controller-level end-to-end test against fake shell-script CLIs. Total 105 across the matrix.
+
+### Changed
+
+- `providers.get_provider` now takes `agents_config` keyword. Mock ignores it; live requires it.
+- `controller.run_unit` threads `cfg.agents` into the provider factory.
 
 ## [0.2.0a1] — 2026-06-01
 
