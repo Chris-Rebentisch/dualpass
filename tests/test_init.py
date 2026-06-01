@@ -1,4 +1,4 @@
-"""Tests for `dualpass init` (landed in v0.1.0a2)."""
+"""Tests for `dualpass init` (scaffolds a project from the bundled example)."""
 
 from __future__ import annotations
 

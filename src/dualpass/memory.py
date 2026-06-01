@@ -3,7 +3,7 @@
 Owns the on-disk layout under `.dualpass-state/`. Read-side helpers for `status`
 and `retro`; write-side helpers for the controller.
 
-Layout (v0.2.0a1):
+Layout:
 
     .dualpass-state/
       <unit>-pipeline.lock.json     # single-flight lock for one running unit
@@ -117,8 +117,18 @@ def read_lock(unit_id: str, project_root: Path) -> dict[str, object] | None:
 
 
 def read_build_marker(unit_id: str, stage: str, project_root: Path) -> BuildMarker | None:
-    """Read and parse the build-complete marker for a unit's stage."""
-    raise NotImplementedError("memory.read_build_marker — landing in v0.3.0")
+    """Read and parse the build-complete marker for a unit's stage.
+
+    v1.0.0: not wired. The controller does not emit build-complete markers;
+    state lives in the event log (`.dualpass-state/<unit>-events.jsonl`).
+    This signature is preserved for forward compatibility — projects that
+    want operator-readable build markers can implement them on top of the
+    event log without changing dualpass's contract.
+    """
+    raise NotImplementedError(
+        "memory.read_build_marker is not wired in v1. The event log is the "
+        "canonical state source; see `observability.read_events`."
+    )
 
 
 def list_stuck_markers(project_root: Path) -> list[Path]:

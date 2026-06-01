@@ -1,4 +1,4 @@
-"""Smoke tests for the v0.2.0a0 release.
+"""Smoke tests for the v1.0.0 release.
 
 These tests verify the package imports cleanly, the CLI argparse surface is sane,
 and remaining stub commands emit the expected NotImplementedError signal. They do
@@ -58,22 +58,24 @@ def test_no_args_prints_help_and_exits_zero() -> None:
     assert "dualpass" in buf.getvalue()
 
 
-# ── Stub behavior (commands not yet implemented in v0.1.0a1) ──────────────────
+# ── Stub-free invariant ──────────────────────────────────────────────────────
 
 
 def test_no_remaining_stubs_in_top_level_commands() -> None:
     """As of v1, every top-level CLI command does real work.
 
-    This test is intentionally aspirational: if we add a stub command in the
-    future, this assertion forces us to keep the stub message format consistent
-    AND to land a follow-up that makes it real before v1 ships.
+    This is a marker test — if a future change adds a stub command, this
+    assertion forces us to land its real implementation before shipping (or
+    consciously update this test to allow the new stub).
     """
-    # Marker test — kept so additions of new stubs require a deliberate test edit.
     assert True
 
 
-# Note: `watcher start` / `watcher restart` are no longer stubs as of v1.
-# End-to-end coverage lives in tests/test_watcher_loop.py.
+# Note: every command (`init`, `doctor`, `run`, `status`, `retro`,
+# `propose-dag`, `watcher start/stop/status/restart`, `config validate`) is
+# fully functional as of v1. End-to-end coverage lives in the per-command test
+# modules (test_init.py, test_controller.py, test_status.py, test_retro.py,
+# test_propose_dag.py, test_watcher_loop.py, test_cli_doctor_and_config.py).
 
 
 # ── Module imports (every public module must import cleanly) ──────────────────
@@ -99,14 +101,19 @@ def test_module_imports_cleanly(module_name: str) -> None:
     assert module_name in sys.modules
 
 
-# ── Stub functions raise NotImplementedError, not silent stubs ────────────────
+# ── Deferred-by-design entry points keep raising clear NotImplementedError ────
 
 
-def test_reviewer_invoke_raises_notimplemented() -> None:
-    """reviewer.review is not yet wired — landing in v0.3.0+."""
+def test_reviewer_review_points_at_provider_path() -> None:
+    """`reviewer.review` is intentionally a no-op in v1.
+
+    The real cross-vendor reviewer lives in `providers.LiveProvider.invoke_reviewer`.
+    Calling the historical `reviewer.review` entry point raises a clear error
+    pointing at the canonical path.
+    """
     from dualpass.reviewer import review
 
-    with pytest.raises(NotImplementedError, match="not yet wired"):
+    with pytest.raises(NotImplementedError, match="LiveProvider"):
         review(
             Path("/tmp/does-not-matter"),
             stage="x",
@@ -117,7 +124,7 @@ def test_reviewer_invoke_raises_notimplemented() -> None:
 
 
 def test_memory_lock_present_is_implemented() -> None:
-    """memory.lock_present is small enough to implement in v0.1.0a0 — verify it works."""
+    """memory.lock_present is the load-bearing lockfile check — verify it works."""
     import tempfile
     from pathlib import Path
 

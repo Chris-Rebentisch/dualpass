@@ -2,7 +2,7 @@
 
 Every config file, every field. dualpass is configured by a small set of YAML/JSON files in your project's `config/` directory. The harness validates all configs at startup via `jsonschema`; bad config = clear error message, not silent misbehavior.
 
-> **Status:** v0.1.0a0. Schemas below are the v1 target. Where validation is not yet implemented, this doc says so.
+> **Status:** v1.0.0. All schemas described below are validated by `dualpass config validate` and at startup by every command that loads config.
 
 ---
 
@@ -310,9 +310,7 @@ All skips default to `false` (gate active). Setting any to `true` is your acknow
 ## Validation
 
 ```bash
-uv run dualpass config validate
+dualpass config validate
 ```
 
-Validates all config files in your project's `config/` against their JSON schemas. Reports first error and exits non-zero on any issue.
-
-(v0.1.0a0 status: validator not yet implemented.)
+Validates all config files in your project's `config/` against their JSON schemas. Reports **every** error in one pass (not just the first) using `file:path: message` format, and exits non-zero on any issue. Also runs cross-file invariants: stage `requires_predecessor` must point at a stage defined earlier; `breakpoints` keys must match real stage names; `max_revision_rounds` overrides must reference real stages.

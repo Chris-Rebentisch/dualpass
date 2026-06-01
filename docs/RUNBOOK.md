@@ -2,16 +2,16 @@
 
 First-boot walkthrough and recovery procedures. Read [CONCEPTS.md](CONCEPTS.md) first if you have not.
 
-> **Status note:** dualpass is at v0.1.0a0 (pre-alpha). The commands documented below are the v1 target. Where a command is not yet implemented, this runbook says so.
+> **Status:** v1.0.0. Every command in this runbook is functional. If a command surprises you, file an issue.
 
 ---
 
-## Part 1 — First boot (target experience, not yet functional)
+## Part 1 — First boot
 
 ### Prerequisites
 
 - **Python 3.12 or 3.13** (`python3 --version`).
-- **uv** for package management — `curl -LsSf https://astral.sh/uv/install.sh | sh`.
+- **pip** (ships with Python) — or `uv` / `pipx` if you prefer.
 - **At least one author-capable CLI** installed and on your `PATH`:
   - `claude` — install via the [Claude Code installer](https://claude.com/claude-code).
   - or `codex`, or any other CLI matching the agent-template contract (see [CONFIG-REFERENCE.md](CONFIG-REFERENCE.md)).
@@ -19,92 +19,87 @@ First-boot walkthrough and recovery procedures. Read [CONCEPTS.md](CONCEPTS.md) 
   - `cursor-agent` — install via [Cursor](https://cursor.com).
   - or use `claude` for both (single-vendor; loses the cross-vendor benefit but works).
 
-### Five-minute smoke test
+The mock provider works without any of the above — it's how you smoke-test the harness before installing real CLIs.
+
+### Two-minute smoke test
 
 ```bash
 git clone https://github.com/Chris-Rebentisch/dualpass && cd dualpass
-uv sync                                        # install deps
-uv run dualpass --version                      # should print 0.1.0a0
-uv run dualpass --help                         # should print top-level commands
+pip install -e .
+dualpass --version                            # prints "dualpass 1.0.0"
+dualpass --help                               # lists every command
 ```
-
-If those four commands all succeed, the package is installed correctly. Continue to environment probe.
 
 ### Environment probe
 
 ```bash
-uv run dualpass doctor
+dualpass doctor
 ```
 
 Reports on:
 
 - Python version
-- `uv` version
-- Which agent CLIs are on `PATH` (`claude`, `cursor-agent`, `codex`, etc.)
-- Which CLIs respond to `--version`
-- Whether a writeable `~/.dualpass/` exists
-- Whether the working directory has any `.dualpass-state/` lockfiles that would block a new run
+- Resolved project root
+- Which agent CLIs are on `PATH` (`claude`, `cursor-agent`, `codex`)
+- Whether `.dualpass-state/` is writable
+- Whether the project's config files are valid
 
-A clean run returns exit 0 with a green table. A degraded run returns exit 1 with red entries pointing at the fix. The probe is non-destructive.
+Exit 0 = healthy. Exit 1 = at least one check failed (output points at the fix). The probe is non-destructive.
 
 ### Scaffold a new project
 
 ```bash
-uv run dualpass init my-project --example coding-agent
+dualpass init my-project
 cd my-project
 ```
 
-This copies the `examples/coding-agent/` skeleton into `my-project/`:
+This copies the `coding-agent` example into `my-project/`. The layout you get:
 
 ```
 my-project/
 ├── config/
-│   ├── agents.yaml          # cross-vendor reviewer config
-│   ├── stages.yaml          # 7-stage coding pipeline
-│   ├── permissions.yaml     # opt-in autonomy
-│   └── dualpass.json        # top-level harness config
-├── docs/
-│   └── _project/
-│       ├── PROJECT.md       # what this project is
-│       ├── DECISIONS.md     # decision registry
-│       ├── BACKLOG.md       # work units status
-│       ├── DOC-MAP.md       # canonical doc index
-│       └── RUNBOOK.md       # project-specific operational notes
-├── skills/                  # the 7 stage skills, generic versions
-└── units/                   # empty — your work units live here
+│   ├── dualpass.json        # top-level harness config (project name, breakpoints, breaker)
+│   ├── agents.yaml          # agent role → CLI invocation template (author / reviewer / fallback)
+│   ├── stages.yaml          # 7-stage pipeline definition
+│   └── permissions.yaml     # tiered safety posture
+└── skills/                  # 7 stage skills (SKILL.md + REVIEWER.md per stage)
 ```
 
-Edit `docs/_project/PROJECT.md` to describe what you're actually building. The other project docs can stay as templates until you have specific decisions to record.
+After `init`, `dualpass doctor --project my-project` verifies the new project's configs validate.
 
-### First unit (mock provider)
+### First unit (mock provider — free, offline)
 
 ```bash
-uv run dualpass run --unit demo-001 --provider mock
+dualpass run --unit demo-001 --provider mock --ignore-breakpoints
 ```
 
-The mock provider returns canned responses for every author and reviewer call. No real LLM is invoked, no cost is incurred. Use this to confirm your pipeline structure is sound before any real run.
+The mock provider returns canned author/reviewer responses. No real LLM is invoked, no cost is incurred. The run completes all 7 stages in under a second, leaving artifacts under `.dualpass-state/demo-001/<stage>-{artifact,review}-v<round>.md`.
 
-Expected output: a run that completes all 7 stages in under a minute, leaving `units/demo-001/*-FINAL.md` artifacts and a `.dualpass-state/demo-001-pipeline-closed.md` marker.
+Use the mock to verify your pipeline structure before any live run.
 
 ### First unit (live provider — costs real money)
 
 ```bash
-uv run dualpass run --unit my-001 --provider live --from-stage research
+dualpass run --unit my-001 --provider live --ignore-breakpoints
 ```
 
-This launches the real pipeline. The orchestrator log goes to `.dualpass-state/logs/my-001-<stage>-<round>-<timestamp>.log`. Per-turn message logs are in the same directory.
+This calls the CLIs configured in `config/agents.yaml` (default: `claude` author + `cursor-agent` reviewer + `claude` fallback). Approximate cost on a small unit: $1–5. Larger units (long specs, complex code stages) can reach $20–50.
 
-Approximate cost on a small unit (Claude Opus author + Cursor reviewer): $1–5. Larger units (complex specs, long code stages) can reach $20–50.
+If you remove `--ignore-breakpoints`, the run pauses cleanly at the `code` stage (the bundled example has `breakpoints.code: true`). Resume after review with:
+
+```bash
+dualpass run --unit my-001 --provider live --from-stage code --ignore-breakpoints
+```
 
 ### Check status
 
 ```bash
-uv run dualpass status --unit my-001
-uv run dualpass status                     # all in-flight units
-uv run dualpass status --json              # machine-readable
+dualpass status                               # all units
+dualpass status --unit my-001                 # single unit
+dualpass status --json                        # machine-readable
 ```
 
-Reads `.dualpass-state/` markers + logs and prints current state per unit.
+State classes you'll see: `in-flight`, `completed`, `paused-at-breakpoint`, `blocked`, `circuit-tripped`, `stale-lock`, `unknown`.
 
 ---
 
@@ -112,85 +107,91 @@ Reads `.dualpass-state/` markers + logs and prints current state per unit.
 
 dualpass is built to fail loudly and recover deterministically. The recovery patterns below cover the common failure modes.
 
-### A — Orchestrator killed mid-stage
+### A — Run process killed mid-stage
 
-**Symptom:** the run process exited (session disconnect, manual kill, OS crash) but artifacts on disk show partial progress.
+**Symptom:** the `dualpass run` process exited (Ctrl-C, OS crash, terminal disconnect) and `dualpass status` shows the unit as `stale-lock`.
 
 **Recovery:**
 
-1. Check `.dualpass-state/<unit>-pipeline.lock.json` — does it still exist?
-2. If yes and no orchestrator PID is alive (`ps -p <pid_from_lock>`), the lock is stale. Remove it: `rm .dualpass-state/<unit>-pipeline.lock.json`.
-3. Determine which stage was in flight from the last log file or `dualpass status --unit <id>`.
-4. Relaunch from the *next* incomplete stage:
+1. Confirm the lock is stale: `dualpass status --unit <id>` reports `stale-lock`.
+2. Remove the lockfile: `rm .dualpass-state/<id>-pipeline.lock.json`.
+3. Determine which stage was in flight by reading `.dualpass-state/<id>-events.jsonl` (the last `stage_round_started` event names it).
+4. Relaunch from that stage:
    ```bash
-   uv run dualpass run --unit <id> --from-stage <next-stage>
+   dualpass run --unit <id> --from-stage <stage-name>
    ```
-   Do NOT relaunch from a stage whose `<stage>-FINAL.md` already exists — that wastes a full re-run.
 
-### B — Audit returns `PASS_WITH_DEVIATIONS` (real code issues)
+### B — Reviewer keeps rejecting (max rounds exhausted)
 
-**Symptom:** the audit reviewer flagged real gaps in the code stage's output.
+**Symptom:** `dualpass run` exited 1 with "blocked after N round(s)" on stderr. `dualpass status` shows `blocked`.
 
 **Recovery:**
 
-- Let the audit-reviewer auto-remediate if possible (the configured reviewer template has remediation authority for non-catastrophic findings).
-- If auto-remediation cannot fix it, the orchestrator will halt the audit loop. Read the audit FINAL, fix manually OR relaunch the code stage with the audit findings in scope:
-  ```bash
-  uv run dualpass run --unit <id> --from-stage code
-  ```
+- Inspect the artifact + review pair under `.dualpass-state/<id>/<stage>-{artifact,review}-v<round>.md`.
+- If the reviewer is being unreasonable, edit the reviewer skill (`skills/<stage>/REVIEWER.md`) to clarify the bar.
+- If the author lacks context, edit the author skill (`skills/<stage>/SKILL.md`).
+- Re-run from that stage:
+   ```bash
+   dualpass run --unit <id> --from-stage <stage-name>
+   ```
 
-### C — Audit returns `PASS_WITH_DEVIATIONS` (pre-existing co-tenant debt)
-
-**Symptom:** the audit reviewer flagged real issues — but they predate this unit and have precedent for acceptance from earlier units.
-
-**Recovery (architect override path):**
-
-1. Verify the findings are pre-existing by checking earlier units' audit FINALs.
-2. Write `units/<unit-id>/audit-FINAL-deviations-accepted.md` citing the precedent units explicitly.
-3. Relaunch from handoff: `uv run dualpass run --unit <id> --from-stage handoff`.
-4. The handoff gate will read the override file and proceed.
-
-This is a deliberate human-in-the-loop pattern. Use sparingly; over-use erodes the value of the audit.
-
-### D — Reviewer provider exhausted (`[resource_exhausted]`)
+### C — Reviewer provider exhausted (`[resource_exhausted]`)
 
 **Symptom:** the primary reviewer CLI returns API-exhaustion errors repeatedly.
 
 **Recovery:**
 
-- dualpass should automatically fall back to `reviewer_fallback` (configured in `config/agents.yaml`) after N consecutive exhaustion failures (default N=3).
-- If it doesn't, the fallback config is missing or misconfigured. Check `config/agents.yaml`.
-- As a last resort, swap the primary reviewer command temporarily and relaunch:
-  ```bash
-  # Edit config/agents.yaml, point reviewer at the working CLI, then:
-  uv run dualpass run --unit <id> --from-stage <current-stage>
-  ```
+- The live provider automatically falls back to `reviewer_fallback` (configured in `config/agents.yaml`) after N consecutive matches against `exhaustion_patterns`. Default N=3, set via `activate_after_consecutive_exhausted`.
+- If the fallback isn't kicking in, verify `config/agents.yaml` has a `reviewer_fallback` role with `exhaustion_patterns` and `activate_after_consecutive_exhausted` set.
+- As a last resort, swap the primary reviewer's `command` to point at a different CLI and relaunch.
 
-### E — Circuit breaker tripped
+### D — Circuit breaker tripped
 
-**Symptom:** the controller halted after 3 no-progress auto-relaunches. A `.dualpass-state/<unit>-circuit-breaker-tripped.md` file exists.
+**Symptom:** `dualpass run` halted with "blocked after N round(s): author produced identical artifact for N consecutive rounds while reviewer kept rejecting". `.dualpass-state/<id>-circuit-tripped.md` exists. `dualpass status` shows `circuit-tripped`.
 
 **Recovery:**
 
-1. Read the trip diagnostic. It will name the stage and the hash of the no-progress signal.
-2. Inspect the artifact and logs — what is the agent actually doing? Common causes: spec defect, missing tool, environment broken.
-3. Fix the root cause.
-4. Reset the breaker: `rm .dualpass-state/<unit>-circuit-state.json`.
-5. Relaunch.
+1. Read the trip diagnostic at `.dualpass-state/<id>-circuit-tripped.md` — it names the stage, rounds used, artifact hash, and the artifact + review paths.
+2. Inspect the artifact and review files referenced in the diagnostic. What's the agent stuck on? Common causes: spec defect, missing tool, environment broken, reviewer asking for the impossible.
+3. Fix the root cause (edit a skill, fix the environment, etc.).
+4. Re-run from the tripped stage:
+   ```bash
+   dualpass run --unit <id> --from-stage <stage-name>
+   ```
+   The trip-marker is informational only — there's no separate reset step.
 
-### F — Watcher fired a rogue run
+To tune the trip threshold, edit `circuit_breaker.max_no_progress_relaunches` in `config/dualpass.json`. Set to `1` for fastest detection; `5` for tolerance of normal author drift.
 
-**Symptom:** a watcher (research → outline, prompt → code, handoff → close) triggered a build you didn't want — typically after editing a research file while the watcher was live.
+### E — Watcher fired a rogue run
+
+**Symptom:** a watcher (`research` / `prompt` / `handoff`) triggered a `dualpass run` you didn't want — typically because an approval marker was dropped while the watcher was live.
 
 **Recovery:**
 
-1. Find the rogue process: `ps -ax | grep run_pipeline`.
-2. Kill it (`kill <pid>`) and its child agent tree.
-3. Remove the stale lockfile: `rm .dualpass-state/<unit>-pipeline.lock.json`.
-4. Stop the offending watcher: `uv run dualpass watcher stop <name>`.
-5. (v1 default) The watcher should not have fired if a build was already in flight — the `_pipeline_lock_present` guard catches this. If it did fire, file a bug.
+1. Find the rogue process: `ps -ax | grep "dualpass run"`.
+2. Kill it: `kill <pid>` (and any child agent CLI processes it spawned).
+3. Remove the stale lockfile: `rm .dualpass-state/<id>-pipeline.lock.json`.
+4. Stop the watcher: `dualpass watcher stop <name>`.
+5. If the watcher fired despite the unit being locked, that's a bug — file an issue with the contents of `.dualpass-state/watcher-<name>.log`.
 
-**Prevention:** always stop watchers before editing research files or initiating a manual build. `uv run dualpass watcher status` lists current state.
+**Prevention:**
+
+- The watcher checks for `<id>-pipeline.lock.json` before triggering; if a lock is held, it skips.
+- Approval markers are one-shot: when the watcher acts on `<id>-approved-<stage>.md`, it writes `<id>-handled-<stage>.md` so the next poll doesn't re-trigger.
+- `dualpass watcher status` reports current watcher state. Stop watchers before editing approval markers manually.
+
+### F — Lock acquired, run never started
+
+**Symptom:** `dualpass run` exited with "lock already held" but `dualpass status --unit <id>` reports `stale-lock`.
+
+**Recovery:**
+
+Remove the lock and retry. dualpass uses `O_CREAT | O_EXCL` for atomic lock creation, so this only happens when a previous run was killed before the `finally` cleanup landed.
+
+```bash
+rm .dualpass-state/<id>-pipeline.lock.json
+dualpass run --unit <id>
+```
 
 ### G — Stuck and no automated recovery applies
 
@@ -198,48 +199,70 @@ This is a deliberate human-in-the-loop pattern. Use sparingly; over-use erodes t
 
 **Recovery:**
 
-1. Write a stuck marker: `.dualpass-state/<unit>-stuck-<reason-kebab-case>.md` — diagnosis + remediation paths attempted.
-2. Skip the unit and continue with later units (if your project supports skip-and-continue per its stage-dependency graph).
-3. Return to the stuck unit later; update the marker's status header to `RESOLVED` *in place* when you fix it (do not delete — the marker is also a historical record).
+1. Run `dualpass retro --unit <id>` — the template includes an "At-a-glance" section seeded from the unit's events. Use it to capture what you tried.
+2. File an issue with the retro contents + `.dualpass-state/<id>-events.jsonl` attached.
+3. If your project has a stage chain that supports skip-and-continue, move to the next unit and revisit this one later.
 
 ---
 
-## Part 3 — Retrospectives (the learnability loop)
+## Part 3 — Retrospectives
 
 After every unit closes:
 
 ```bash
-uv run dualpass retro --unit <id>
+dualpass retro --unit <id>
 ```
 
-This opens an editor with a template at `units/<id>/retro.md` (filled with auto-detected friction signals from the unit's logs and markers). You add:
+This creates `docs/_project/RETROSPECTIVES/<id>.md` with a template pre-populated from the unit's event log (final state, stages completed, paused-at-breakpoint, blocked-at). You fill in:
 
 - What went well
-- What friction patterns emerged
-- New issues that should be standardized as fixes (to a skill, gate, or controller behavior)
-- Open questions
+- What went wrong
+- Surprises
+- Changes for next time
 
 After a range of units, aggregate:
 
 ```bash
-uv run dualpass retro --range 001..010 --output docs/_project/RETROSPECTIVES/units-001-010.md
+dualpass retro --range 001..010 --output docs/_project/RETROSPECTIVES/units-001-010.md
 ```
 
-This produces a campaign retrospective summarizing the unit-level retros. The output is a markdown file your team can review.
+The range parser handles zero-padded numeric ranges with or without prefixes (`001..010` or `my-001..my-010`). Missing units are flagged in the rollup's frontmatter.
 
-**The retrospective is the input to pattern hardening.** When a friction pattern recurs, that's the signal to write a new gate, update a skill, or patch the controller. dualpass surfaces the signal; humans do the patching.
+**The retrospective is the input to pattern hardening.** When a friction pattern recurs, that's the signal to edit a stage skill, tighten a gate, or adjust a config knob. dualpass surfaces the signal; you do the patching.
 
 ---
 
-## Part 4 — Asking for help
+## Part 4 — Background watchers
+
+For long-running pipelines, the watcher daemons auto-resume paused units when approval markers appear.
+
+```bash
+dualpass watcher start research              # daemonize the research-watcher
+dualpass watcher start all                   # all three (research, prompt, handoff)
+dualpass watcher status                      # check running / stopped / stale-pid
+dualpass watcher stop research               # SIGTERM the watcher
+```
+
+How a watcher resumes a paused unit:
+
+1. The user (or another process) writes `.dualpass-state/<id>-approved-<stage>.md`.
+2. Within ~5 seconds (configurable via `--poll-interval`), the matching watcher notices, checks the unit isn't already locked, writes `.dualpass-state/<id>-handled-<stage>.md` to prevent double-trigger, then spawns `dualpass run --unit <id> --from-stage <stage> --ignore-breakpoints`.
+
+On first start, the watcher seeds existing approval markers as "already handled" so it doesn't stampede the historical backlog. The seed report lives at `.dualpass-state/watcher-<name>.seed.json`.
+
+For debugging, start in foreground: `dualpass watcher start research --foreground`.
+
+---
+
+## Part 5 — Asking for help
 
 - **GitHub Issues:** https://github.com/Chris-Rebentisch/dualpass/issues — bug reports, feature requests
 - **Discussions:** https://github.com/Chris-Rebentisch/dualpass/discussions — usage questions, pattern sharing
-- **Security:** see [SECURITY.md](../SECURITY.md) (v1 — not yet present)
+- **Security:** see [SECURITY.md](../SECURITY.md)
 
 When filing an issue, include:
 
-- dualpass version (`dualpass --version`)
+- `dualpass --version`
 - `dualpass doctor` output
-- The contents of any `.dualpass-state/<unit>-stuck-*.md` or `<unit>-circuit-breaker-tripped.md`
-- The last orchestrator log file
+- The contents of any `.dualpass-state/<id>-circuit-tripped.md` or `<id>-stuck-*.md`
+- The last 50 lines of `.dualpass-state/<id>-events.jsonl`

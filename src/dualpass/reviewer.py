@@ -1,30 +1,29 @@
-"""Dual-pass reviewer with cross-vendor fallback.
+"""Reviewer types — thin re-export of the provider-layer reviewer interface.
 
-The signature feature of dualpass. When the primary reviewer CLI fails with
-`[resource_exhausted]` (or any configured exhaustion pattern) N consecutive times,
-this module transparently falls back to the configured fallback reviewer. The dual-pass
-review contract is preserved even when one vendor is sick.
+The cross-vendor reviewer fallback mechanic — dualpass's headline feature —
+lives in `dualpass.providers.LiveProvider.invoke_reviewer`. This module
+re-exports `ReviewResult` and `ReviewVerdict` under their historical names so
+older imports continue to resolve.
 
-v0.1.0a0 status: stub.
+`review(...)` is intentionally not wired here. The canonical path is:
+
+    from dualpass.providers import get_provider
+    provider = get_provider("live", agents_config=cfg.agents)
+    result = provider.invoke_reviewer(ctx, author_result)
+
+That path handles transient retries, cross-vendor fallback on
+`[resource_exhausted]`, and the dual-pass parallel reviewer pattern. Calling
+`reviewer.review(...)` directly raises NotImplementedError pointing at the
+real path.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
 
-ReviewVerdict = Literal["approved", "rejected", "blocked"]
+from dualpass.providers.base import ReviewResult, ReviewVerdict
 
-
-@dataclass
-class ReviewResult:
-    """Outcome of one reviewer invocation."""
-
-    verdict: ReviewVerdict
-    review_artifact: Path
-    served_by: str  # which role served the review (e.g. "reviewer" or "reviewer_fallback")
-    findings: list[dict] | None = None
+__all__ = ["ReviewResult", "ReviewVerdict", "review"]
 
 
 def review(
@@ -36,13 +35,13 @@ def review(
     project_root: Path,
     dual_pass: bool = False,
 ) -> ReviewResult:
-    """Invoke the reviewer (and fallback if exhausted) and return the verdict.
+    """Historical entry point — not wired.
 
-    v0.2.0a0 status: the live (subprocess-based) reviewer is not yet wired. Use
-    `providers.MockProvider.invoke_reviewer` for offline runs. The cross-vendor
-    fallback mechanic lands once the live provider exists.
+    Use `providers.get_provider("live", agents_config=...).invoke_reviewer(...)` instead.
+    That path implements the same contract plus transient retry + cross-vendor
+    fallback + the dual-pass parallel reviewer pattern.
     """
     raise NotImplementedError(
-        "reviewer.review is not yet wired — v0.2.0a0 ships the mock provider only. "
-        "Use providers.MockProvider for offline runs. Live reviewer lands later."
+        "reviewer.review is not yet wired — use providers.LiveProvider.invoke_reviewer "
+        "instead. Cross-vendor fallback + dual-pass parallel review live there."
     )

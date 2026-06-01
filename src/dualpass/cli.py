@@ -251,16 +251,23 @@ def _build_parser() -> argparse.ArgumentParser:
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-_CONTROLLER_MILESTONE = "v0.2.0 (controller, stage runner, mock provider)"
-_WATCHER_MILESTONE = "v0.3.0 (watchers + state seeding)"
+def _stub(command: str, milestone: str = "") -> int:
+    """Defensive fallback for code paths argparse should have rejected.
 
-
-def _stub(command: str, milestone: str = _CONTROLLER_MILESTONE) -> int:
+    Every dispatch arm in `main()` routes to a real handler in v1, and argparse's
+    `choices=` constraint blocks unknown subcommands before we get here. This
+    function exists only so the dispatcher's "no handler matched" fallback
+    produces a clear error if someone wires up a new subcommand and forgets to
+    add a matching dispatch arm.
+    """
     msg = (
-        f"dualpass: '{command}' is not yet implemented.\n"
-        f"  v{__version__} ships scaffolding only. This command lands in {milestone}.\n"
-        f"  Track progress: https://github.com/Chris-Rebentisch/dualpass/blob/main/CHANGELOG.md"
+        f"dualpass: internal — '{command}' fell through to the no-handler fallback. "
+        f"This is a bug; please file an issue at "
+        f"https://github.com/Chris-Rebentisch/dualpass/issues with the exact "
+        f"argv you ran."
     )
+    if milestone:
+        msg += f"  ({milestone})"
     print(msg, file=sys.stderr)
     return 2
 
@@ -476,7 +483,7 @@ def _cmd_watcher(
             provider=provider,
         )
 
-    return _stub(f"watcher {action}", _WATCHER_MILESTONE)
+    return _stub(f"watcher {action}")
 
 
 def _start_one_watcher(

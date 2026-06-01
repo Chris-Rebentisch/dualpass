@@ -17,13 +17,20 @@
   4. Emit unit_completed, release lock, return 0.
 
 The controller is provider-agnostic: it gets a Provider via `providers.get_provider`.
-v0.2.0a1 ships the mock provider only; live lands later.
+Both `mock` (deterministic, offline) and `live` (real subprocess agent invocations
+with cross-vendor fallback) ship in v1.
 
-Not yet wired (will land in follow-up milestones):
+Wired in v1:
   - Circuit breaker (no-progress detection across consecutive failed rounds)
-  - Auto-relaunch on transient errors
-  - Build-marker frontmatter parsing
-  - Dual-pass parallel reviewer
+  - Cross-vendor reviewer fallback (in the live provider)
+  - Dual-pass parallel reviewer (when `stage.dual_pass_reviewer: true`)
+  - Single-flight lockfile with atomic O_CREAT|O_EXCL acquire
+  - Breakpoint pause + `--from-stage` resume
+
+Out of scope for v1 (signature stubs only):
+  - `memory.read_build_marker` — the event log is the canonical state source.
+  - `context.build_stage_context` / `build_precedent_cache` — stage skills
+    curate context inline per SKILL.md.
 """
 
 from __future__ import annotations

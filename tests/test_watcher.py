@@ -1,4 +1,4 @@
-"""Tests for the watcher PID-file lifecycle (v0.2.0a1)."""
+"""Tests for the watcher PID-file lifecycle (status, stop, pid liveness)."""
 
 from __future__ import annotations
 

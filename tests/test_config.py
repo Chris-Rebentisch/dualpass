@@ -1,4 +1,4 @@
-"""Tests for the config loader + validator (landed in v0.1.0a1)."""
+"""Tests for the config loader + validator."""
 
 from __future__ import annotations
 

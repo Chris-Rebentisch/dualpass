@@ -22,8 +22,9 @@ doesn't stampede the entire historical backlog of paused units when it comes
 online. Without seeding, a freshly-started watcher would see every paused unit
 in the project's history and try to resume them all at once.
 
-Lifecycle helpers (`status`, `stop`, `_pid_is_alive`) are reused from the
-v0.2.0a1 skeleton.
+Lifecycle helpers (`status`, `stop`, `_pid_is_alive`) are shared with the
+PID-file-only lifecycle path; the fs-polling loop (`watch_once`, `_run_loop`)
+sits on top of them.
 """
 
 from __future__ import annotations
@@ -77,7 +78,7 @@ class TriggerResult:
     spawned_pid: int | None  # None if dry-run or spawn failed
 
 
-# ── PID-file helpers (carried over from v0.2.0a1) ────────────────────────────
+# ── PID-file helpers ─────────────────────────────────────────────────────────
 
 
 def _pid_path(name: WatcherName, project_root: Path) -> Path:
@@ -130,7 +131,7 @@ def _read_pidfile(path: Path) -> dict[str, object] | None:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-# ── Status + stop (unchanged from v0.2.0a1) ──────────────────────────────────
+# ── Status + stop ────────────────────────────────────────────────────────────
 
 
 def status(
@@ -472,7 +473,7 @@ def start(
     return os.getpid()
 
 
-# ── Test/admin hook (kept stable for the v0.2.0a1 watcher tests) ─────────────
+# ── Test/admin hook (lets tests plant a synthetic pidfile) ───────────────────
 
 
 def _write_synthetic_pidfile(

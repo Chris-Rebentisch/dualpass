@@ -2,7 +2,7 @@
 
 ## Status
 
-dualpass is at **v0.1.0a0** (pre-alpha). The threat surface is small because most functionality is not yet implemented — but the design surface is real, and we welcome security input now to shape the v1 architecture.
+dualpass is at **v1.0.0** (feature-complete, production-ready). The threat surface is small but real — security input is welcome, and any vulnerability will be patched on a prioritized schedule.
 
 ## Reporting a vulnerability
 
@@ -54,7 +54,7 @@ The signature feature of dualpass — a different-vendor reviewer judging the au
 
 | Version | Supported |
 |---|---|
-| 0.1.x | Yes (pre-alpha — security fixes welcome, breaking changes likely) |
-| < 0.1.0 | n/a |
+| 1.0.x  | Yes — current. Security fixes land on minor/patch bumps. |
+| 0.x.x  | No — pre-v1 prereleases are not security-supported. Upgrade to 1.0+. |
 
-When v1.0.0 lands, this policy will tighten to declare a security-support window per release.
+Semver applies from v1.0.0 forward. Breaking API changes require a major version bump.

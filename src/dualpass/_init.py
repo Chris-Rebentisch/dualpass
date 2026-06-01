@@ -152,5 +152,5 @@ def format_next_steps(result: InitResult) -> str:
         f"  2. dualpass doctor             # confirm agent CLIs + config are healthy\n"
         f"  3. Edit config/agents.yaml to point at the CLIs you actually have installed\n"
         f"  4. Edit skills/<stage>/SKILL.md for each stage to teach the agent your domain\n"
-        f"  5. dualpass run --unit demo-001 --provider mock   # (lands in v0.2.0)\n"
+        f"  5. dualpass run --unit demo-001 --provider mock --ignore-breakpoints\n"
     )

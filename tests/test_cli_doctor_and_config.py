@@ -1,4 +1,4 @@
-"""Tests for the functional CLI commands (doctor + config validate) landed in v0.1.0a1."""
+"""Tests for the functional CLI commands `doctor` and `config validate`."""
 
 from __future__ import annotations
 
