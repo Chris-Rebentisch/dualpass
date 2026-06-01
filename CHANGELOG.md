@@ -13,6 +13,27 @@ Possible future work (open to feedback):
 - PWD halt-and-remediate and cumulative-count cascade as enforced built-in gates (currently inherited at the doctrine level only)
 - Disk-unblock polling for hung cursor-agent reviewer subprocesses (mirrors `run_subprocess_with_reviewer_disk_unblock` in the source pipeline). v1.0.2 reads the verdict from the on-disk review file, so a hung subprocess doesn't lose the verdict — but it does still tie up the slot until timeout. A polling-and-terminate pattern would shorten that window.
 
+## [1.0.3] — 2026-06-01
+
+A second live-provider dogfood test surfaced an architectural mismatch in the bundled gate stack: v1.0.2's `check-frontmatter` gate fired on every stage, but real LLM authors (claude in particular) reliably produce YAML frontmatter only on a subset of artifact shapes. On outline / spec / prompt / audit / handoff, claude's narrative instinct emits a preamble paragraph before any structured block, which makes a `\A---` frontmatter check unsatisfiable even when the artifact body is otherwise correct. The frontmatter gate is fine; the bundled default just enforced it on stages where the proven production pattern doesn't.
+
+### Changed
+
+- **`examples/coding-agent/config/stages.yaml`** — frontmatter policy aligned with proven multi-cycle pattern from a production source pipeline:
+  - `research` stage keeps `check-frontmatter` (research files are machine-parsed downstream — frontmatter IS the contract).
+  - `code` stage keeps `check-marker-frontmatter` (the build-complete marker is machine-parsed by the controller's halt logic — strict YAML required).
+  - `outline`, `spec`, `prompt` drop `check-frontmatter`. These use markdown H1 + bold-prefix metadata lines instead — the natural shape claude tends to produce.
+  - `audit`, `handoff` drop `check-frontmatter` and ship with empty `preflight_gates: []`. Sectional markdown reports verified by humans + targeted parse scripts at handoff time.
+  - Stage comments now document the per-stage header-shape contract so operators understand the policy.
+
+### Why this matters
+
+Forcing YAML frontmatter on stages where claude narrates is a recipe for stalled rounds: the gate catches a real mechanical violation, but the agent can't override its narration instinct round-over-round and the run halts. Matching the gate stack to the agent's natural output shape preserves mechanical discipline where it matters (research, code marker) and removes pointless friction where it doesn't (outline / spec / prompt / audit / handoff). Lesson distilled from a production pipeline that ran this H1+bold-line shape across 80+ build cycles.
+
+### Tests
+
+224 passing (unchanged — existing tests didn't pin the bundled gate stack).
+
 ## [1.0.2] — 2026-06-01
 
 The first live-provider dogfood test surfaced a fundamental design mismatch: the v1.0.0 LiveProvider assumed agents stream markdown to stdout, but real agent CLIs (claude, cursor-agent) write artifacts to disk via their own tools and emit status summaries to stdout. The provider was destructively overwriting agent-written files with the status-summary stdout. This release ports the proven file-on-disk-first patterns from a production source pipeline.

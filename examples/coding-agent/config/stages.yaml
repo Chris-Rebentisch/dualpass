@@ -4,16 +4,23 @@
 # approve.
 #
 # Edit freely. Drop stages you don't need; add stages your project requires.
+#
+# Preflight-gate policy (v1.0.3) — frontmatter required only where it IS the
+# contract. Research files and the code stage's build-complete marker are
+# machine-parsed by downstream skills/scripts, so YAML frontmatter is enforced
+# there. Outline / spec / prompt / audit / handoff use markdown H1 + bold-prefix
+# metadata lines instead — the natural shape claude tends to produce. Forcing
+# YAML on those stages fights claude's narration instinct without meaningful
+# benefit. Lesson distilled from 80+ production build cycles where the
+# H1+bold-line shape held up cleanly across reviewers and downstream parsers.
 
 stages:
   # research has no reviewer by design (v1.0.2): research is exploration,
   # not judgment-against-spec. There's no standard a reviewer can apply
   # without doing the same research themselves. Real failures surface in
-  # outline/spec where claims get turned into commitments. The preflight
-  # gates still catch mechanical issues (missing frontmatter, broken
-  # citations). To opt in to LLM review of research, set
-  # `reviewer_skill: skills/research/REVIEWER.md` — the file ships as an
-  # opt-in template.
+  # outline/spec where claims get turned into commitments. The check-frontmatter
+  # gate still catches mechanical issues — research artifacts DO use YAML
+  # frontmatter because downstream skills parse it structurally.
   - name: research
     author_skill: skills/research/SKILL.md
     reviewer_skill: null
@@ -22,36 +29,40 @@ stages:
     max_rounds: 6
     breakpoint_default: false
 
+  # Outline uses markdown H1 + bold-prefix metadata. No frontmatter gate;
+  # the H1+bold-line shape is the contract.
   - name: outline
     author_skill: skills/outline/SKILL.md
     reviewer_skill: skills/outline/REVIEWER.md
     preflight_gates:
-      - check-frontmatter
       - check-line-citations
     max_rounds: 6
     requires_predecessor: research
 
+  # Spec uses the same H1+bold shape. AC wording check stays — the
+  # "exactly N" trap is real and worth catching mechanically.
   - name: spec
     author_skill: skills/spec/SKILL.md
     reviewer_skill: skills/spec/REVIEWER.md
     dual_pass_reviewer: true
     preflight_gates:
-      - check-frontmatter
       - check-line-citations
       - check-acceptance-criteria-wording
     max_rounds: 8
     requires_predecessor: outline
 
+  # Prompt is the executable build prompt — narrative shape, no frontmatter.
   - name: prompt
     author_skill: skills/prompt/SKILL.md
     reviewer_skill: skills/prompt/REVIEWER.md
     dual_pass_reviewer: true
     preflight_gates:
-      - check-frontmatter
       - check-line-citations
     max_rounds: 6
     requires_predecessor: spec
 
+  # Code stage emits a build-complete marker; the marker IS strict YAML
+  # frontmatter, machine-parsed by the controller's halt logic.
   - name: code
     author_skill: skills/code/SKILL.md
     reviewer_skill: null   # code stage uses the dedicated audit stage for review
@@ -61,18 +72,19 @@ stages:
     requires_predecessor: prompt
     breakpoint_default: true   # default: pause before code so you can review intent
 
+  # Audit is a sectional report — markdown H1 + Verdict line + findings list.
+  # No frontmatter; downstream handoff parses the Verdict line directly.
   - name: audit
     author_skill: skills/audit/SKILL.md
     reviewer_skill: skills/audit/REVIEWER.md
-    preflight_gates:
-      - check-frontmatter
+    preflight_gates: []
     max_rounds: 6
     requires_predecessor: code
 
+  # Handoff is the human-readable session close-out. Narrative shape.
   - name: handoff
     author_skill: skills/handoff/SKILL.md
     reviewer_skill: skills/handoff/REVIEWER.md
-    preflight_gates:
-      - check-frontmatter
+    preflight_gates: []
     max_rounds: 6
     requires_predecessor: audit

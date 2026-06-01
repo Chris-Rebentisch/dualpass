@@ -1,6 +1,6 @@
 [project]
 name = "dualpass"
-version = "1.0.2"
+version = "1.0.3"
 description = "A reliability-first agent harness with cross-vendor independent review built in."
 readme = "README.md"
 license = { text = "Apache-2.0" }
