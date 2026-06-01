@@ -101,20 +101,22 @@ Exactly one verdict line. No alternatives. No "PASS but...".
 11. **Capture-the-why verification (§5 of your output).** For each invariant carve-out the build introduced (lock-file edit, append-only relaxation, allowlist addition, registered-instrument count change), verify the build's source code carries a docstring/comment naming:
     1. The invariant.
     2. The carve-out.
-    3. The authorization source (decision number, spec section, post-FINAL amendment).
+    3. The authorization source (a referenced decision, the spec section that approved it, or a post-FINAL operator amendment).
 
     Missing or incomplete capture-the-why comment = audit deviation.
 
-12. **AC1 wording discipline.** When auditing AC1 test-gate claims, verify the spec used ">= N" form with the co-tenant carve-out. "Exactly N" phrasings are a deviation — cite the AC1-wording lint.
+12. **Acceptance-criteria wording discipline.** When auditing AC1 test-gate claims, verify the spec used ">= N" form with the co-tenant carve-out. "Exactly N" phrasings are a deviation — cite the `check-acceptance-criteria-wording` gate.
 
 13. **Compose Findings (§6 of your output).** Each numbered finding:
     - **Description** (concise).
-    - **Severity** — `mechanical` (wire-literal mismatch, wrong line number, stale count) or `design` (architectural contradiction, invariant violation, auth gap).
+    - **Severity** — `mechanical` (wire-literal mismatch, wrong line number, stale count) or `design` (architectural contradiction, invariant violation, auth gap). Tag with an HTML comment (`<!-- severity: mechanical -->` or `<!-- severity: design -->`) for the controller's audit trail.
     - **Evidence** — file path + line number, test output, or probe result.
     - **Suggested remediation** — concrete next action.
 
 14. **Compose Verdict.** Apply verdict semantics:
     - **`PASS`** — every AC met, tests pass, scope honored, AND zero open deviations OR every remaining deviation is a **ratified deferral** with `Owner`, `Fix-by unit:` pointer, and `Registry pointer:` when decision-shaped. Vague "hygiene / operator later" without those fields **cannot** be `PASS` — use `FAIL` or `PASS_WITH_DEVIATIONS`.
+
+      Decision-shaped means: the deferral introduces a convention, lesson, or commitment that some other artifact will need to reference later. If the deferral is purely local cleanup with no downstream pointer, the registry-pointer requirement does not apply.
     - **`PASS_WITH_DEVIATIONS`** — work is acceptable but carries minor issues (low-severity code-smells that don't violate an AC). **Blocks the handoff stage** until either (a) the operator lands a revised audit FINAL with `PASS`, or (b) the operator drops a `audit-v{round}-FINAL-deviations-accepted.md` file alongside the audit.
     - **`FAIL`** — at least one AC not met, OR a test fails, OR scope violated. Remediation path named.
 
@@ -124,7 +126,7 @@ Exactly one verdict line. No alternatives. No "PASS but...".
 
 - **Re-run tests yourself.** Never accept "tests passed" without re-running.
 - **Cite evidence on every claim.** File path, line number, test output, or probe result.
-- **Verify negative assertions by reading, not just grepping.** Six false findings in the unit-47 audit traced to grep-only verification.
+- **Verify negative assertions by reading, not just grepping.** In one past audit, six false findings traced to grep-only verification.
 - **Capture-the-why for every invariant carve-out.** Missing comment = deviation.
 - **Machine-stable verdict line.** `**Verdict:** PASS|PASS_WITH_DEVIATIONS|FAIL` exactly.
 - **`PASS` is strict.** Open deviations without operator-ratified deferral = `FAIL` or `PASS_WITH_DEVIATIONS`. Never PASS with hand-waved hygiene items.
@@ -139,5 +141,5 @@ Exactly one verdict line. No alternatives. No "PASS but...".
 - **Missing the negative-assertion trap on frontend components.** Partial reads of component files produce false-negative findings. Read top-to-bottom.
 - **Missing emit calls wrapped in try/except.** `grep` for the event name may miss them; read the full route handler / CLI entry point.
 - **Approving a unit where the code touched files outside scope without rationale.** That's a refuse-to-merge.
-- **Missing the AC1 "exactly N" trap.** It's invisible if you skim. Look for it.
+- **Missing the acceptance-criteria "exactly N" trap.** It's invisible if you skim. Look for it.
 - **Audit verdict line without exact machine-stable form.** Downstream parser breaks; handoff stage stalls.

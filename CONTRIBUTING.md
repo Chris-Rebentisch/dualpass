@@ -2,26 +2,62 @@
 
 Thanks for your interest. dualpass is a small, opinionated project; the contribution surface is intentionally narrow.
 
+### Python 3.14 note
+
+Editable installs (`pip install -e .`) appear to succeed on Python 3.14 + macOS but leave the package silently unimportable: Python 3.14's site.py skips `.pth` files carrying the auto-applied `com.apple.provenance` extended attribute, and macOS sets that xattr on every newly-written file in the venv. The xattr can't be reliably stripped (`xattr -d` is a no-op for `com.apple.provenance`).
+
+**Workarounds:**
+
+- **Run tests directly from the repo root** — `conftest.py` adds `src/` to `sys.path` automatically, so `.venv/bin/pytest tests/` works regardless of install state.
+- **Wheel install** — `pip install dualpass` (once published) works on 3.14; no editable-mode pth file involved.
+- **Set `PYTHONPATH=src`** explicitly when invoking the CLI from the repo: `PYTHONPATH=src .venv/bin/dualpass ...`.
+- **Use Python 3.12 or 3.13** for editable development — both predate the `.pth` xattr check.
+
+The package metadata declares `requires-python = ">=3.12"` (no upper bound), so the wheel installs cleanly on 3.14. The pin is intentionally loose; the issue is local development, not distribution.
+
 ## Before opening a PR
 
 1. **Open an issue first** for anything larger than a typo or a bug fix. Design changes (new commands, new config keys, new stage primitives) need to be discussed before code lands — the project's value is its opinionated defaults, not its surface area.
-2. **Run the test suite locally:** `uv run pytest`.
-3. **Run the linter:** `uv run ruff check . && uv run ruff format --check .`.
+2. **Run the test suite locally.** With `uv`: `uv run pytest`. With stdlib venv:
+
+   ```bash
+   python -m venv .venv
+   .venv/bin/pip install -e ".[dev]"
+   .venv/bin/pytest tests/ -v
+   .venv/bin/ruff check src/ tests/
+   ```
+
+3. **Run the linter:** `uv run ruff check . && uv run ruff format --check .` (or the `.venv/bin/ruff` invocation above).
 4. **Update CHANGELOG.md** under `[Unreleased]`.
 
-## What we accept
+## Scope of contributions
 
-- Bug fixes with regression tests.
-- Documentation improvements (CONCEPTS, RUNBOOK, CONFIG-REFERENCE, examples).
-- New gate plugins (drop-in scripts under `src/dualpass/gates/` with tests).
-- Additional example projects under `examples/` (must be self-contained and runnable with the mock provider).
-- CLI templates for additional agent providers (the project's CLI-template contract is documented in CONFIG-REFERENCE.md).
+**In scope** (open a PR, ideally after a short issue thread):
 
-## What we don't accept
+- New built-in gates (drop-in modules under `src/dualpass/gates/` with tests).
+- New `EventType` entries (with discussion — these are part of the observability contract).
+- New example projects under `examples/` (self-contained, runnable with the mock provider).
+- Doc improvements (CONCEPTS, RUNBOOK, CONFIG-REFERENCE, examples).
+- Test coverage for under-tested paths.
+- CLI templates for additional agent providers (contract documented in CONFIG-REFERENCE.md).
 
-- New core abstractions in `src/dualpass/{controller,stages,reviewer,context,memory}.py` without prior discussion. These are the load-bearing surfaces and changes compound.
-- Switching from CLI-template invocation to vendor SDKs. The CLI contract is a load-bearing design choice (see README).
-- Visual builders, web UIs, hosted-service shims. These are explicit non-goals.
+**Likely out of scope without prior discussion:**
+
+- Vendor-SDK integration. The CLI-template contract is a load-bearing design choice (see README).
+- DAG execution engines or alternative orchestration topologies. dualpass is intentionally a linear stage pipeline.
+- Hosted / SaaS layers, multi-tenant servers.
+- Web UIs or visual builders.
+- New core abstractions in `src/dualpass/{controller,stages,reviewer,context,memory}.py`. These are the load-bearing surfaces and changes compound.
+
+**Always welcome:**
+
+- Bug reports with reproduction steps.
+- Doc fixes (typos, clarifications, broken links).
+- New examples that exercise real-world stage shapes.
+- Retros from your own pipelines — what worked, what didn't, what surprised you.
+
+**Not accepted:**
+
 - AI-generated docs or PRs without human review. Author your own writing.
 
 ## Code style

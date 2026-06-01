@@ -16,7 +16,7 @@ You are NOT a same-vendor sanity check — you are an independent adversarial re
 2. **Research fidelity.** Open the research file. Compare:
    - Every research §6 open question → resolved in outline §1 or carried forward to outline §7. None silently dropped.
    - Every research §5 recommendation → reflected in outline §4 Locked Decisions or out-of-scope in §5 with rationale.
-   - Every `Proposed D-number:` (or equivalent decision marker) in research §3 / §5 → matched in outline §4. **No renumbering** unless the operator revised research.
+   - Every proposed decision marker in research §3 / §5 → matched in outline §4. **No renumbering** unless the operator revised research.
 
 3. **Wire-literal parity.** For every status string, enum value, lifecycle label, transition target the outline mentions, run the probe against the source-of-truth file:
    - `grep -rn '"<value>"' src/<module>/models.py` (or equivalent).
@@ -37,6 +37,12 @@ You are NOT a same-vendor sanity check — you are an independent adversarial re
 7. **Scope discipline.** §5 Out of Scope is explicit with rationale. Items "implicitly" out of scope are not — they get listed or they're in scope.
 
 8. **No premature design.** §2 names files and locks structural decisions; it does NOT specify function signatures, data shapes, or pseudocode. If sections read like spec material, the outline has over-reached.
+
+## Severity tagging
+
+Tag every finding with an HTML comment naming its severity: `<!-- severity: mechanical -->` for wire-literal mismatches, wrong line numbers, stale counts, citation errors, missing sections, format errors; `<!-- severity: design -->` for invariant violations, architectural contradictions, scope inversions, or anything that changes what is being built.
+
+The controller does NOT halt on severity — author rounds always auto-continue until they self-block or exhaust the round budget. The severity tag is for the audit trail and for the author's triage. Mis-tagging is not a blocker on its own, but a review that omits tags entirely is rejected — the author needs the signal.
 
 ## What you're NOT checking
 

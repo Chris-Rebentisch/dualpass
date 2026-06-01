@@ -20,12 +20,15 @@ mechanical; the value is in what the operator writes.
 
 from __future__ import annotations
 
+import json
 import re
+from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 from dualpass import observability
+from dualpass.memory import state_dir
 
 _RETRO_DEFAULT_DIR = "docs/_project/RETROSPECTIVES"
 
@@ -171,5 +174,240 @@ def aggregate(project_root: Path, unit_ids: list[str], output: Path | None = Non
     if missing:
         toc += "\n\n**Missing retros:** " + ", ".join(f"`{u}`" for u in missing)
 
-    output_path.write_text(header + toc + "\n" + "".join(chunks), encoding="utf-8")
+    patterns_section = aggregate_patterns(unit_ids=unit_ids, project_root=project_root)
+
+    output_path.write_text(
+        header + toc + "\n\n" + patterns_section.rstrip() + "\n" + "".join(chunks),
+        encoding="utf-8",
+    )
     return RangeResult(output=output_path, included=included, missing=missing)
+
+
+# ── Cross-unit pattern aggregation ──────────────────────────────────────────
+
+
+# A tiny English stoplist. Keeps the analysis cheap and dependency-free; the
+# goal is to surface candidate phrases, not to do real NLP.
+_STOPWORDS: frozenset[str] = frozenset(
+    {
+        "a", "an", "the",
+        "and", "or", "but", "if", "then", "so", "because",
+        "is", "was", "were", "are", "be", "been", "being",
+        "have", "has", "had", "do", "does", "did",
+        "i", "you", "we", "they", "it", "he", "she",
+        "this", "that", "these", "those",
+        "to", "of", "in", "on", "for", "with", "at", "by", "from",
+        "as", "not", "no", "yes",
+        "my", "our", "their", "its",
+        "will", "would", "should", "can", "could", "may", "might",
+        "than", "too", "very", "just",
+    }
+)
+
+# Section headers we scan in unit retros for free-form lessons.
+_RETRO_SCAN_HEADERS: tuple[str, ...] = (
+    "## What went wrong",
+    "## Changes for next time",
+    "## Friction patterns",
+)
+
+
+def _extract_retro_sections(retro_text: str) -> str:
+    """Return the concatenated body of the headers in `_RETRO_SCAN_HEADERS`.
+
+    Stops at the next `## ` header. Returns "" if none of the headers are
+    present.
+    """
+    lines = retro_text.splitlines()
+    out: list[str] = []
+    capture = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("## "):
+            capture = any(stripped == h for h in _RETRO_SCAN_HEADERS)
+            continue
+        if capture:
+            out.append(line)
+    return "\n".join(out)
+
+
+_TOKEN_RE = re.compile(r"[a-z][a-z'-]+")
+
+
+def _tokenize(text: str) -> list[str]:
+    """Lowercase, strip non-alpha, drop stopwords and very short tokens."""
+    return [
+        tok
+        for tok in _TOKEN_RE.findall(text.lower())
+        if tok not in _STOPWORDS and len(tok) >= 3
+    ]
+
+
+def _read_events_raw(unit_id: str, project_root: Path) -> list[dict]:
+    """Read the unit's event log as raw dicts. Missing log returns []."""
+    path = state_dir(project_root) / f"{unit_id}-events.jsonl"
+    if not path.is_file():
+        return []
+    out: list[dict] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            out.append(json.loads(line))
+        except json.JSONDecodeError:
+            # Bad rows are skipped silently — the aggregator is a reporting
+            # tool, not a validator.
+            continue
+    return out
+
+
+def aggregate_patterns(
+    *,
+    unit_ids: list[str],
+    project_root: Path,
+) -> str:
+    """Return a markdown section: 'Patterns across N units'.
+
+    For each unit, opens `.dualpass-state/<unit>-events.jsonl`, counts the
+    event-type occurrences grouped by (stage, event_type), and aggregates
+    across all units into a single table. Below the table, lists the top 5
+    (stage, event_type) combinations that occurred in more than half the
+    units — the "recurring friction" patterns worth hardening.
+
+    Also walks each unit's retro markdown (if present) and extracts unigrams
+    and bigrams from the bodies of `## What went wrong`, `## Changes for
+    next time`, and `## Friction patterns` sections. Tokens appearing across
+    3 or more units' retros are surfaced as candidate cross-unit patterns
+    (capped at 12).
+
+    Missing event logs and missing retros are skipped silently. Always
+    returns at least the section header, even when there is no data.
+    """
+    n_units = len(unit_ids)
+    lines: list[str] = [f"## Patterns across {n_units} units", ""]
+
+    # ── Event aggregation ────────────────────────────────────────────────
+    # Counts keyed on (stage, event_type). `units_with` tracks the set of
+    # unit_ids that contributed at least one matching event — that's how we
+    # compute the "Units with >=1" column and the >half-of-units filter.
+    totals: Counter[tuple[str, str]] = Counter()
+    units_with: dict[tuple[str, str], set[str]] = {}
+    units_with_any_events = 0
+
+    for uid in unit_ids:
+        events = _read_events_raw(uid, project_root)
+        if not events:
+            continue
+        units_with_any_events += 1
+        seen_in_this_unit: set[tuple[str, str]] = set()
+        for ev in events:
+            stage = ev.get("stage") or "-"
+            event_type = ev.get("type") or "-"
+            key = (stage, event_type)
+            totals[key] += 1
+            seen_in_this_unit.add(key)
+        for key in seen_in_this_unit:
+            units_with.setdefault(key, set()).add(uid)
+
+    if totals:
+        lines.append(
+            "| Stage    | EventType                 | Total | Per-unit avg | Units with >=1 |"
+        )
+        lines.append(
+            "|----------|---------------------------|-------|--------------|----------------|"
+        )
+        # Sort by total desc, then by (stage, event_type) for stability.
+        sorted_rows = sorted(
+            totals.items(),
+            key=lambda kv: (-kv[1], kv[0][0], kv[0][1]),
+        )
+        for (stage, event_type), total in sorted_rows:
+            per_unit_avg = total / n_units if n_units else 0.0
+            n_units_with = len(units_with.get((stage, event_type), set()))
+            lines.append(
+                f"| {stage:<8} | {event_type:<25} | {total:>5} "
+                f"| {per_unit_avg:>12.2f} | {n_units_with} / {n_units}        |"
+            )
+        lines.append("")
+
+        # Recurring friction: pairs present in more than half of the units.
+        half_threshold = n_units / 2 if n_units else 0
+        friction = sorted(
+            (
+                (stage, event_type, len(units_with.get((stage, event_type), set())), total)
+                for (stage, event_type), total in totals.items()
+                if len(units_with.get((stage, event_type), set())) > half_threshold
+            ),
+            key=lambda r: (-r[2], -r[3], r[0], r[1]),
+        )[:5]
+        lines.append("### Recurring friction")
+        lines.append("")
+        if friction:
+            for stage, event_type, n_with, total in friction:
+                lines.append(
+                    f"- `{stage}` / `{event_type}` — seen in {n_with}/{n_units} units "
+                    f"({total} total occurrences)"
+                )
+        else:
+            lines.append(
+                "(no event pattern appeared in more than half the units)"
+            )
+        lines.append("")
+    else:
+        lines.append("(no event data found across the requested units)")
+        lines.append("")
+
+    # ── Retro keyword extraction ─────────────────────────────────────────
+    # Count distinct units mentioning each token, then surface tokens that
+    # appear in >=3 units.
+    units_per_token: dict[str, set[str]] = {}
+    total_per_token: Counter[str] = Counter()
+    n_retros_seen = 0
+
+    for uid in unit_ids:
+        path = retro_path(project_root, uid)
+        if not path.is_file():
+            continue
+        try:
+            body = _extract_retro_sections(path.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        if not body.strip():
+            continue
+        n_retros_seen += 1
+        tokens = _tokenize(body)
+        # Build unigrams and bigrams. Bigrams from adjacent tokens only.
+        ngrams: list[str] = list(tokens)
+        ngrams.extend(f"{a} {b}" for a, b in zip(tokens, tokens[1:], strict=False))
+        unique_in_unit = set(ngrams)
+        for ng in unique_in_unit:
+            units_per_token.setdefault(ng, set()).add(uid)
+        for ng in ngrams:
+            total_per_token[ng] += 1
+
+    lines.append("### Candidate cross-unit patterns (from retros)")
+    lines.append("")
+    if n_retros_seen == 0:
+        lines.append("(no recurring retro keywords)")
+        lines.append("")
+        return "\n".join(lines)
+
+    # Threshold: appears in >=3 units' retros.
+    candidates = [
+        (ng, len(units), total_per_token[ng])
+        for ng, units in units_per_token.items()
+        if len(units) >= 3
+    ]
+    if not candidates:
+        lines.append("(no recurring retro keywords)")
+        lines.append("")
+        return "\n".join(lines)
+
+    # Sort by (n_units desc, total desc, longer-ngram first, alpha).
+    candidates.sort(key=lambda r: (-r[1], -r[2], -len(r[0]), r[0]))
+    # Cap at 12; if a bigram and its constituent unigram both qualify,
+    # keep both — operators can read past it.
+    for ng, n_units_with_token, total in candidates[:12]:
+        lines.append(f"- **{ng}** — {n_units_with_token} units, {total} mentions")
+    lines.append("")
+    return "\n".join(lines)

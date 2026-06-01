@@ -1,6 +1,6 @@
 {
   "$schema": "https://github.com/Chris-Rebentisch/dualpass/raw/main/schemas/dualpass.json",
-  "version": "0.1.0",
+  "schema_version": "0.1.0",
   "project_name": "coding-agent (example)",
   "unit_id_pattern": "<slug>",
   "max_revision_rounds": {

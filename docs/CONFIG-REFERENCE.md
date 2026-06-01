@@ -16,9 +16,10 @@ config/
 ├── agents.yaml          # named agent roles → CLI templates (required)
 ├── stages.yaml          # ordered stage chain (required)
 ├── permissions.yaml     # safety tiers (required)
-├── context-sources.yaml # which docs feed into stage context (optional)
 └── gates/               # per-stage gate plugin overrides (optional)
 ```
+
+> **Note:** `src/dualpass/context.py` currently uses a fixed set of project-doc sources (`PROJECT.md`, `DECISIONS.md`, `BACKLOG.md`, `DOC-MAP.md` under `docs/_project/`). Per-project override of these sources is a future-release item; no `context-sources.yaml` is loaded today.
 
 ---
 
@@ -27,7 +28,7 @@ config/
 ```json
 {
   "$schema": "https://github.com/Chris-Rebentisch/dualpass/raw/main/schemas/dualpass.json",
-  "version": "0.1.0",
+  "schema_version": "0.1.0",
   "project_name": "my-project",
   "unit_id_pattern": "<slug>",
   "max_revision_rounds": {
@@ -54,14 +55,14 @@ config/
 
 | Field | Type | Default | Purpose |
 |---|---|---|---|
-| `version` | string | (required) | dualpass schema version this config targets |
+| `schema_version` | string | (required) | Config-file schema version (e.g. `"0.1.0"`). Tracks the shape of the config files; distinct from the dualpass package version reported by `dualpass --version`. |
 | `project_name` | string | (required) | Display name in `dualpass status` output |
 | `unit_id_pattern` | string | `<slug>` | One of `<slug>`, `<int>`, `<int>[a-z]?`. Validates `--unit` arg shape. |
 | `max_revision_rounds` | object | `{default: 6}` | Cap on reviewer loops per stage. Per-stage overrides allowed. |
-| `breakpoints` | object | all false | Stage halt points. `true` = pause; flip with `dualpass set-breakpoint`. |
+| `breakpoints` | object | all false | Stage halt points. `true` = pause. There is no `dualpass set-breakpoint` subcommand; edit this map (or the per-stage `breakpoint_default` in `stages.yaml`) directly. |
 | `circuit_breaker.max_no_progress_relaunches` | int | 3 | Trip threshold |
 | `single_flight_lockfile` | bool | true | Whether watchers respect `<unit>-pipeline.lock.json`. Leave true. |
-| `auto_lock_finals` | bool | true | Whether the controller auto-copies approved drafts to `-FINAL.md` |
+| `auto_lock_finals` | bool | false | When `true`, the controller copies an approved `<stage>-v<N>.md` to its `<stage>-v<N>-FINAL.md` sibling once the reviewer approves. Default `false` keeps draft-to-FINAL promotion an explicit operator step. |
 
 ---
 
@@ -143,7 +144,7 @@ stages:
     preflight_gates:
       - check-frontmatter
       - check-line-citations
-      - check-ac1-wording
+      - check-acceptance-criteria-wording
     max_rounds: 8
     requires_predecessor: outline
 
@@ -174,11 +175,21 @@ opt_in_skips:
   DUALPASS_SKIP_PRE_CODE_INDEPENDENT_REVIEW: false
   DUALPASS_SKIP_ARTIFACT_PREFLIGHT: false
   DUALPASS_SKIP_VERIFY_ARTIFACT_CLAIMS: false
-  DUALPASS_SKIP_COUNT_REBASE: false
 
+# `forbidden_actions` is a mapping of category name -> list of regex strings.
+# The schema (src/dualpass/schemas/permissions.json) enforces this shape; the
+# example below mirrors the bundled coding-agent example.
 forbidden_actions:
-  - destructive_git: ["push --force-with-lease.*main", "reset --hard.*origin", "branch -D main"]
-  - mass_delete: ["rm -rf /", "rm -rf ~"]
+  destructive_git:
+    - "push --force-with-lease.*main"
+    - "reset --hard.*origin"
+    - "branch -D main"
+  mass_delete:
+    - "rm -rf /"
+    - "rm -rf ~"
+  credential_exfil:
+    - "cat.*\\.env"
+    - "cat.*credentials"
 
 audit_log: .dualpass-state/permission-audit.log
 ```
@@ -191,37 +202,20 @@ audit_log: .dualpass-state/permission-audit.log
 | `forbidden_actions` | Regex blocklist; matched actions are denied regardless of posture |
 | `audit_log` | Where every permission decision is recorded |
 
-The `auto_lock_finals: true` setting in `dualpass.json` does NOT bypass permission checks — it only auto-promotes approved drafts to FINAL after the reviewer's approval lands.
+When `auto_lock_finals: true` is set in `dualpass.json`, the controller copies an approved `<stage>-v<N>.md` to its `<stage>-v<N>-FINAL.md` sibling on reviewer approval. The default is `false` (operator promotes drafts to FINAL manually). The flag does NOT bypass permission checks — it only promotes the file after the reviewer's approval lands.
 
 ---
 
-## `config/context-sources.yaml` — project-doc context curation
+## Project-doc context sources (fixed in v1)
 
-```yaml
-project_docs:
-  - path: docs/_project/PROJECT.md
-    inject_into_stages: [research, outline, spec]
-    slice: full
-  - path: docs/_project/DECISIONS.md
-    inject_into_stages: [outline, spec, code, audit]
-    slice: section
-    section: "## Active decisions"
-  - path: docs/_project/BACKLOG.md
-    inject_into_stages: [research, outline]
-    slice: row
-    row_selector: "unit == {unit_id}"
+`src/dualpass/context.py` builds the stage-context bundle from a fixed set of project docs:
 
-predecessor_finals:
-  enabled: true
-  compress_to_max_tokens: 8000
+- `docs/_project/PROJECT.md`
+- `docs/_project/DECISIONS.md`
+- `docs/_project/BACKLOG.md`
+- `docs/_project/DOC-MAP.md`
 
-precedent_cache:
-  enabled_for_stages: [outline, spec]
-  count: 3
-  ratified_only: true
-```
-
-This file controls what `src/dualpass/context.py` reads when building the stage-context bundle. If omitted, dualpass uses sensible defaults (predecessor FINAL + project docs full-text).
+Plus the predecessor stage's FINAL artifact and (for outline / spec) a small precedent cache of recent peer artifacts. These sources are hard-coded in v1; operator-overridable context curation (via a `config/context-sources.yaml` file or similar) is on the v1.1 roadmap.
 
 ---
 
@@ -239,15 +233,15 @@ sub_agents:
     tools: [read_file]
     context_cap_tokens: 6000
 context_sources:
-  - units/{unit_id}/research-FINAL.md
+  - .dualpass-state/{unit_id}/research-FINAL.md
   - .dualpass-state/{unit_id}-stage-context.md
   - .dualpass-state/{unit_id}-precedent-cache.md
 artifacts_produced:
-  - units/{unit_id}/outline-v{round}.md
+  - .dualpass-state/{unit_id}/outline-v{round}.md
 success_criteria:
-  - Outline has §1–§N matching template at references/outline-output-format.md
+  - Outline has §1–§N matching the template at references/outline-output-format.md
   - Every line citation resolves against the real source
-  - No D-numbers or invented identifiers
+  - No invented identifiers (cite real symbols and files only)
 ---
 
 # Outline-author skill
@@ -256,7 +250,7 @@ success_criteria:
 
 ## Process
 
-1. Read `units/{unit_id}/research-FINAL.md`.
+1. Read `.dualpass-state/{unit_id}/research-FINAL.md`.
 2. Read `.dualpass-state/{unit_id}-stage-context.md`.
 3. ...
 
@@ -276,15 +270,15 @@ See `examples/coding-agent/skills/` for working examples generalized from a real
 
 A gate is an executable (shell script or Python script) that exits 0 on success, non-zero on failure. The harness invokes it before the reviewer launches and uses its exit code + stderr as the gate result.
 
-Built-in gates (ship with dualpass):
+Built-in gates ship with dualpass and are auto-registered the moment the `dualpass` package is imported (`src/dualpass/gates/builtins.py` calls `register_gate(...)` at import time). Reference any of them by name from `stages.yaml` without further setup:
 
 | Gate name | Purpose |
 |---|---|
-| `check-frontmatter` | Validates artifact YAML frontmatter against the stage's expected schema |
-| `check-line-citations` | Verifies every `path:line` citation resolves; uses substring containment for short tokens (length ≤ 40) and difflib similarity for phrases |
-| `check-single-flight` | Confirms no other orchestrator is running for this unit |
-| `check-marker-frontmatter` | Validates build-complete marker frontmatter (status, exit_signal, blocker_kind) |
-| `check-ac1-wording` | (spec-stage only) Rejects "exactly N" phrasings that overconstrain audit gates |
+| `check-frontmatter` | Confirms the artifact begins with a YAML frontmatter block delimited by `---` fences and contains every field listed in the gate's `required_fields` config (defaults to `["title"]`). Catches malformed or missing frontmatter before a reviewer round is spent on it. |
+| `check-line-citations` | Walks every `path:line` reference in the artifact body and resolves the file. When the gate's `verify_lines` config is set, it also checks that each cited line number is in range for the target file. Stale citations are flagged with file and line; the diagnostic caps at the first 10. |
+| `check-single-flight` | Refuses to proceed when the unit's pipeline lockfile is held by another process. Passes when the lock is absent or held by the current PID; fails with the foreign PID in the diagnostic. Prevents two orchestrators from racing on the same unit. |
+| `check-marker-frontmatter` | Validates the build-complete marker the author stage emits at `.dualpass-state/<unit>-build-complete.md`. Surfaces parse errors here rather than letting the controller fail later when it tries to read `exit_signal` / `blocker_kind`. |
+| `check-acceptance-criteria-wording` | Scans only inside acceptance-criteria sections of the artifact and flags brittle exact-count phrasings (e.g. "exactly 12 tests"). Loose wording ("at least 12 tests covering …") preserves the same intent without coupling the criterion to incidental edits. |
 
 Project-level gates live in `gates/<stage>/<gate-name>.{sh,py}`. Reference them in `stages.yaml` by file basename. The harness passes the artifact path as `$1` and the unit id as `$2`.
 
@@ -299,11 +293,12 @@ dualpass honors a small set of env vars for opt-out / debugging:
 | `DUALPASS_SKIP_PRE_CODE_INDEPENDENT_REVIEW` | Skip the pre-code independent review subprocess |
 | `DUALPASS_SKIP_ARTIFACT_PREFLIGHT` | Skip the artifact-preflight gate batch |
 | `DUALPASS_SKIP_VERIFY_ARTIFACT_CLAIMS` | Skip the line-citation containment check |
-| `DUALPASS_SKIP_COUNT_REBASE` | Skip the cumulative-count cascade (only relevant if your project has one) |
 | `DUALPASS_REQUIRE_SERVICES` | Force live-service-dependent tests to run (used in CI) |
 | `DUALPASS_STATE_DIR` | Override `.dualpass-state/` location (rarely needed) |
 
 All skips default to `false` (gate active). Setting any to `true` is your acknowledgment that you understand the safety implication.
+
+> **Note on inherited doctrine.** Two patterns from the harness's lineage — a "no-progress halt-and-remediate" guard (detects when the reviewer keeps rejecting an artifact whose source-tree hash has not changed) and a cumulative-count cascade (verifies counts cited in a spec against live codebase probes) — are documented at the reviewer-skill level (see `skills/audit/REVIEWER.md`). They are NOT enforced by a built-in gate in v1. A gate plugin that automates either is a v1.1 candidate.
 
 ---
 

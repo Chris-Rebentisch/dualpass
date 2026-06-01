@@ -9,10 +9,46 @@ Possible future work (open to feedback):
 - Hosted variant (out of scope for v1 by design — currently local-filesystem only)
 - PyPI publish workflow + signed releases
 - Per-reviewer focus prompts for dual-pass (currently both reviewers see the same prompt; the contrast comes from LLM nondeterminism and cross-vendor fallback)
+- Sub-agent orchestration (currently documented affordance only — CLI agents handle their own isolation)
+- Built-in cost ledger (parsing per-CLI cost output was too vendor-specific to ship in v1; ROADMAP candidate)
+- PWD halt-and-remediate and cumulative-count cascade as enforced built-in gates (currently inherited at the doctrine level only)
+
+## [1.0.1] — 2026-06-01
+
+A reliability-and-completeness pass over the v1.0.0 surface. Most of what landed here closes gaps where the docs described behavior that the controller did not actually implement.
+
+### Added
+
+- `src/dualpass/context.py` — stage-context bundle + precedent-cache builders (were `NotImplementedError` stubs in 1.0.0). The bundle compresses upstream-FINAL summaries + recent ratified precedents into a single context blob that the controller regenerates at every stage entry, so author and reviewer subprocesses start from the same compressed view of project state.
+- `src/dualpass/memory.read_build_marker` — parses the build-complete marker YAML frontmatter. The controller now honors `exit_signal: stop | continue | escalate` from author output, implementing the author-driven halt contract the docs already described (lesson inherited from a production source pipeline).
+- `src/dualpass/gates/` — gate registry + 5 built-in gates: `check-frontmatter`, `check-line-citations`, `check-single-flight`, `check-marker-frontmatter`, `check-acceptance-criteria-wording`.
+- Controller invokes preflight gates before reviewer launch; gate failures auto-revise the round rather than advancing to review.
+- Config-load validation: stages referencing unregistered gate names fail `dualpass config validate` and `dualpass doctor`. Catches typos before they cost a stage round.
+- `auto_lock_finals` now actually copies approved artifacts to `<unit>/<stage>-v<N>-FINAL.md`. Previously documented, not wired.
+- `dualpass retro --range` now surfaces cross-unit patterns (EventType counts + retro keyword frequencies) above the per-unit table of contents.
+- New EventTypes: `gate_failed`, `stage_finalized`.
+
+### Changed
+
+- `requires-python` set to `>=3.12` (no upper bound). Wheel install works on Python 3.14; editable installs on 3.14 + macOS are affected by Python 3.14's `site.py` skipping `.pth` files that carry the auto-applied `com.apple.provenance` xattr. A top-level `conftest.py` adds `src/` to `sys.path` so the test suite works regardless of install state. See CONTRIBUTING.md for workarounds.
+- Renamed gate `check-ac1-wording` to `check-acceptance-criteria-wording` in the example config — self-explanatory to a first-time reader, no behavioral change.
+- Path layout in docs aligned to implementation: artifacts land under `.dualpass-state/<unit>/<stage>-v<N>.md`, not `units/<unit>/`. The implementation has always written to `.dualpass-state/<unit>/`; the docs were stale.
+
+### Fixed
+
+- CONCEPTS.md self-referential "foundations document" link.
+- CONFIG-REFERENCE.md `forbidden_actions` YAML example mismatch with the schema.
+- Marker filename drift in CONCEPTS.md (`circuit-breaker-tripped.md` to `circuit-tripped.md`) — implementation has always used the shorter name.
 
 ## [1.0.0] — 2026-06-01
 
 The feature-complete release. Everything originally scoped for v1 is in.
+
+### Known v1.0.0 limitations
+
+- Sub-agent orchestration is deferred to a future release. CLI agents handle their own isolation (each `claude` / `cursor-agent` invocation is a separate process with its own context); `dualpass` v1.0 documents the sub-agent affordance in stage skills but does not orchestrate sub-agents directly.
+- The cost ledger is described in CONCEPTS.md but not emitted by the controller. Parsing per-CLI cost output was too vendor-specific and too fragile to ship; revisit in v1.1.
+- PWD halt-and-remediate and cumulative-count cascade — two reliability lessons inherited from a production source pipeline — live at the doctrine level (in REVIEWER skills) but are not enforced as built-in gates. v1.1 candidate.
 
 ### Added (since v0.2.0a2)
 

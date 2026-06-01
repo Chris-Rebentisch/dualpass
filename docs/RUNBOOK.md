@@ -6,6 +6,23 @@ First-boot walkthrough and recovery procedures. Read [CONCEPTS.md](CONCEPTS.md) 
 
 ---
 
+## Fresh-install verification (30 seconds)
+
+The fastest way to confirm dualpass is wired up and the mock pipeline runs end-to-end on your machine:
+
+```bash
+pip install dualpass        # or, from a checkout: pip install -e .
+dualpass doctor
+dualpass init test-pipeline
+cd test-pipeline
+dualpass run --unit demo-001 --provider mock --ignore-breakpoints
+dualpass status --unit demo-001
+```
+
+A healthy run finishes in under a second and ends with `dualpass status` reporting `completed` for `demo-001`. If `doctor` exits non-zero, fix what it points at before continuing. If the mock run fails, the issue is in the harness wiring — not in your agent CLIs — and is worth filing.
+
+---
+
 ## Part 1 — First boot
 
 ### Prerequisites
@@ -100,6 +117,45 @@ dualpass status --json                        # machine-readable
 ```
 
 State classes you'll see: `in-flight`, `completed`, `paused-at-breakpoint`, `blocked`, `circuit-tripped`, `stale-lock`, `unknown`.
+
+---
+
+## Troubleshooting / FAQ
+
+Quick answers to the friction patterns that come up most often. Most of them are environment or configuration mistakes, not harness bugs — start here before opening an issue.
+
+**Q. `dualpass status --unit X` says `state=unknown`.**
+
+Probable cause: you ran the command from outside a project directory, so dualpass cannot find a `.dualpass-state/` for the unit. Either `cd` into the directory holding `config/`, or pass `--project-root <path>` to point at it explicitly.
+
+**Q. `dualpass doctor` says everything is OK, but my pipeline still fails on the first live run.**
+
+`doctor` checks Python, project root, CLI availability on `PATH`, state-dir writability, and config validity. It does NOT probe whether the `command` template in your `config/agents.yaml` actually invokes a working model — a typo in the CLI template will pass `doctor` and fail at runtime. Always run a mock pass first to verify pipeline structure:
+
+```bash
+dualpass run --unit <id> --provider mock --ignore-breakpoints
+```
+
+Then re-run with `--provider live`.
+
+**Q. `pip install -e .` fails on Python 3.14.**
+
+The package requires `>=3.12,<3.14` until the upstream fix lands. Use Python 3.12 or 3.13 for editable installs (`pip install -e .`). The wheel install (`pip install dualpass`) works on 3.14.
+
+**Q. How do I know if a stage's preflight gates are actually running?**
+
+Set the stage's `preflight_gates` list in `config/stages.yaml`. Each gate failure (and each pass) is recorded as a `gate_failed` / `gate_passed` event in `.dualpass-state/<unit>-events.jsonl`. An empty `preflight_gates` list means no preflight runs for that stage — silent skip, not silent failure.
+
+**Q. The author signaled `exit_signal: stop` — what now?**
+
+The controller wrote `.dualpass-state/<unit>-stuck-author-stop.md` capturing the author's stated reason. Read it, resolve the underlying issue (edit a skill, fix the environment, update inputs), then either:
+
+- Delete the stuck-marker and re-run: `rm .dualpass-state/<unit>-stuck-author-stop.md && dualpass run --unit <id> --from-stage <stage>`
+- Or follow the standard stuck-marker pattern: edit the header `status:` line in the stuck-marker to `RESOLVED` in place, then re-launch from the same stage.
+
+**Q. My reviewer keeps approving things that look obviously wrong.**
+
+Self-evaluation bias — when the same model author and review, the reviewer rubber-stamps. Check `config/agents.yaml`: the `author` role and the `reviewer` role should resolve to DIFFERENT vendors (e.g. `claude` author + `cursor-agent` reviewer, not `claude` for both). The cross-vendor split is load-bearing; the single-vendor setup is documented as a fallback but loses the disagreement signal.
 
 ---
 

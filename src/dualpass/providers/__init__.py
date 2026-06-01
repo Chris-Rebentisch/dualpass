@@ -21,7 +21,7 @@ from .base import (
     StageContext,
 )
 from .live import LiveProvider, LiveProviderError
-from .mock import MockProvider, MockScript
+from .mock import MockMarker, MockProvider, MockScript
 
 
 def get_provider(name: str, *, agents_config: AgentsConfig | None = None) -> Provider:
@@ -46,6 +46,7 @@ __all__ = [
     "AuthorResult",
     "LiveProvider",
     "LiveProviderError",
+    "MockMarker",
     "MockProvider",
     "MockScript",
     "Provider",

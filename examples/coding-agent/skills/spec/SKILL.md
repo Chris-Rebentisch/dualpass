@@ -76,9 +76,9 @@ From round 2 onward, prepend `## Changes from v(N-1)` immediately after the head
 
 6. **Outline-to-spec divergence preflight.** Reconcile every file-path claim in outline §2 with the spec draft's file lists and step text. If the on-disk implementation path differs from outline wording, the spec must either (A) stay aligned with outline and flag a blocker to the operator, or (B) carry an explicit **Outline Correction Note** in §17 naming the discrepancy and why source-of-truth code wins. **Never silently diverge.**
 
-7. **Verification before assertion.** Before any §3, §4, §6, §8, §9, §12, or §16 assertion that a *name* — table, vertex/edge type, function, route, file path, enum value, migration id, env var, metric label, config key — exists or has a specific shape, run a verification probe and document the probe + result in §4 D-decision Evidence sub-block or §16 PASS criteria. Probes: `grep -rn '<name>' src/`, `find . -name '<file>'`, `ls src/...`, project-specific (`alembic check`, `psql \dt`, schema dump). Every §6 CP that names a route or enum value must `grep`-verify before drafting.
+7. **Verification before assertion.** Before any §3, §4, §6, §8, §9, §12, or §16 assertion that a *name* — table, vertex/edge type, function, route, file path, enum value, migration id, env var, metric label, config key — exists or has a specific shape, run a verification probe and document the probe + result in the §4 decision Evidence sub-block or §16 PASS criteria. Probes: `grep -rn '<name>' src/`, `find . -name '<file>'`, `ls src/...`, project-specific (`alembic check`, `psql \dt`, schema dump). Every §6 CP that names a route or enum value must `grep`-verify before drafting.
 
-8. **Draft each mandatory section.** Walk sections 1 through 18 in template order. §4 (Locked Decisions) elaborates each decision from the outline §4 with full rationale, evidence (line-cited sources), alternatives considered, and any allow/forbid lists. §6 (Build Steps / Checkpoints) elaborates each outline §3 step into a checkpoint with `**Files:**`, `**Verification:**`, and a stable `*[CPN]*` label. §9 (Test Plan) narrows the outline's test-count band to a per-file enumeration. §12 (Acceptance Criteria) maps each AC to one or more `*[CPN]*` checkpoints. §16 (Pass/Fail Policy) names every PASS criterion and FAIL gate.
+8. **Draft each mandatory section.** Walk sections 1 through 18 in template order. §4 (Locked Decisions) elaborates each decision lifted from outline §4 with full rationale, evidence (line-cited sources), alternatives considered, and any allow/forbid lists. §6 (Build Steps / Checkpoints) elaborates each outline §3 step into a checkpoint with `**Files:**`, `**Verification:**`, and a stable `*[CPN]*` label. §9 (Test Plan) narrows the outline's test-count band to a per-file enumeration. §12 (Acceptance Criteria) maps each AC to one or more `*[CPN]*` checkpoints. §16 (Pass/Fail Policy) names every PASS criterion and FAIL gate.
 
 9. **Validate cross-section linkage before writing (mandatory).** The skill checks the four-section contract before drafting is considered complete:
    - Every §12 AC has a `*[CPN]*` mapping (or is the non-goal acceptance guard).
@@ -92,7 +92,7 @@ From round 2 onward, prepend `## Changes from v(N-1)` immediately after the head
 
    **Linkage failures are blockers; the skill does not write a draft with broken linkage.**
 
-10. **AC1 wording discipline.** §12 AC1 test-gate phrasing uses ">= N" form and includes the co-tenant carve-out ("may exit non-zero only from pre-existing co-tenant failures in `docs/test-suite-allowlist.md`" or equivalent). **Never** use "exactly N" or "must equal" — those phrasings have caused infinite remediation loops in past builds.
+10. **Acceptance-criteria wording discipline.** §12 AC1 test-gate phrasing uses ">= N" form and includes the co-tenant carve-out ("may exit non-zero only from pre-existing co-tenant failures in `docs/test-suite-allowlist.md`" or equivalent). **Never** use "exactly N" or "must equal" — those phrasings have caused infinite remediation loops in past builds. The `check-acceptance-criteria-wording` preflight gate enforces this if configured.
 
 11. **No unratified additive-contract surface.** Validate that spec API response fields, statuses, and telemetry payload fields are bounded by outline-locked scope. If the spec introduces additive contract fields not explicitly locked upstream, the skill must either remove them or declare them in §17 as an operator-decision with explicit rationale. **Silent additive scope expansion is forbidden.**
 
@@ -103,7 +103,7 @@ From round 2 onward, prepend `## Changes from v(N-1)` immediately after the head
 ## Hard rules
 
 - **Never proceed when the upstream outline is missing or ambiguous.** Multiple FINALs is operator error; do not pick.
-- **Decision numbers come from the outline.** The skill never invents decision numbers in spec mode. New decisions surfaced during spec authoring go to §17 Open Questions.
+- **Decision identifiers come from the outline.** The skill never invents new decision identifiers in spec mode. New decisions surfaced during spec authoring go to §17 Open Questions.
 - **Outline file ownership boundaries are binding.** If on-disk ownership conflicts with outline wording, the spec records an **Outline Correction Note** (with file citation) and surfaces to the operator. Never silent drift.
 - **Cross-section linkage must validate before write.** Broken linkage = blocker, not warning.
 - **Checkpoint labels are stable across versions.** `*[CPN]*` labels never renumber. Insertions get letter suffixes (CP3a, CP3b); removed checkpoints stay numbered (CP3-removed).
@@ -115,8 +115,8 @@ From round 2 onward, prepend `## Changes from v(N-1)` immediately after the head
 - **Drafting against a missing or ambiguous outline FINAL.** Always check; stop on either condition.
 - **Pattern-guessing the format from a single spec.** Read 2–3 recent specs as precedent.
 - **Restating the outline inside the spec.** The outline names files and locks decisions; the spec elaborates file-by-file with line citations, exact test names, exact CP mappings.
-- **Inventing decision numbers in spec mode.** Every D-number in spec §4 must come from outline §4.
-- **Citing source files without line numbers.** D-decision rationale referencing existing code must include line citations (`src/foo.py:45`). "See `src/foo.py`" is too coarse.
+- **Inventing decision identifiers in spec mode.** Every decision in spec §4 must trace to outline §4.
+- **Citing source files without line numbers.** Decision rationale referencing existing code must include line citations (`src/foo.py:45`). "See `src/foo.py`" is too coarse.
 - **Listing typo fixes in Changes-from-v(N-1).** Material changes only.
 - **Writing a spec with broken cross-section linkage.** ACs without CP mappings, CPs with no AC citing them, per-file test counts that don't sum, PASS criteria missing a verification command — any of these fails the spec's own audit.
 - **Renumbering CP labels across versions.** Breaks every AC and prompt-stage cross-reference.

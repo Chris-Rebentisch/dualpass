@@ -36,6 +36,12 @@ You are reviewing the prompt artifact for unit `{unit_id}`, round `{round_number
 
 8. **Files-in-scope discipline.** Files §2 says the code agent may touch must be the exact set the spec lists. Anything outside is forbidden. Anything missing makes the spec's ACs unsatisfiable.
 
+## Severity tagging
+
+Tag every finding with an HTML comment naming its severity: `<!-- severity: mechanical -->` for CP-mapping errors, label drift, wrong cumulative-test arithmetic, citation errors, missing sections; `<!-- severity: design -->` for new design decisions the prompt introduces beyond the spec, files-in-scope expansion, or anything that changes what the code-stage agent will actually do.
+
+The controller does NOT halt on severity — author rounds always auto-continue until they self-block or exhaust the round budget. The severity tag is for the audit trail and for the author's triage. Mis-tagging is not a blocker on its own, but a review that omits tags entirely is rejected — the author needs the signal.
+
 ## What you're NOT checking
 
 - Whether the spec's design is correct. Settled.

@@ -28,6 +28,8 @@ EventType = Literal[
     "stage_completed",
     "stage_revision_requested",
     "stage_blocked",
+    "stage_finalized",
+    "gate_failed",
     "breakpoint_hit",
     "circuit_breaker_tripped",
     "lockfile_acquired",

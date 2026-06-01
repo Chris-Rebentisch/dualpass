@@ -71,7 +71,7 @@ This is a **summary**. Actual code lives in-tree wherever the prompt's files-in-
 7. **Capture-the-why for invariant carve-outs.** Any change that diverges from a load-bearing invariant (lock-file edits, append-only relaxations, allowlist additions, registered-instrument count changes) MUST include a docstring/comment near the change naming:
    1. **The invariant** (e.g., "single-flight lockfile per unit").
    2. **The carve-out** (what changed and why).
-   3. **The authorization source** (decision number, spec section, or post-FINAL operator amendment).
+   3. **The authorization source** (a referenced decision, the spec section that approved it, or a post-FINAL operator amendment).
 
    Missing capture-the-why comments = audit deviation.
 

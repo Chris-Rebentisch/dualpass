@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from dualpass import _init, controller, providers
-from dualpass.memory import units_dir
+from dualpass.memory import BuildMarker, units_dir, write_build_marker
 from dualpass.observability import read_events
 from dualpass.providers.base import (
     AuthorResult,
@@ -34,7 +34,22 @@ class PerLabelMock(Provider):
 
     def invoke_author(self, ctx: StageContext) -> AuthorResult:
         artifact = ctx.units_dir / f"{ctx.stage.name}-artifact-v{ctx.round_number}.md"
-        artifact.write_text(f"# Mock for {ctx.stage.name}\n", encoding="utf-8")
+        # Write YAML frontmatter so `check-frontmatter` preflight passes.
+        artifact.write_text(
+            f"---\ntitle: Mock {ctx.stage.name}\nstage: {ctx.stage.name}\n---\n\n"
+            f"# Mock for {ctx.stage.name}\n",
+            encoding="utf-8",
+        )
+        # Satisfy `check-marker-frontmatter` with a benign continue marker.
+        write_build_marker(
+            BuildMarker(
+                unit=ctx.unit_id,
+                stage=ctx.stage.name,
+                status="complete",
+                exit_signal="continue",
+            ),
+            ctx.project_root,
+        )
         return AuthorResult(artifact_path=artifact, served_by="per-label-mock")
 
     def invoke_reviewer(self, ctx: StageContext, artifact: AuthorResult) -> ReviewResult:

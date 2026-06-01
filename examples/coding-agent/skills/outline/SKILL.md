@@ -72,7 +72,7 @@ Section 4 (Locked Decisions) — lift proposed decisions from research §5 verba
 6. **Research fidelity gate (mandatory; runs before drafting §1–§4).**
 
    - **Section presence proof.** Verify `## 3.` through `## 6.` exist in the research file and §5–§6 are non-empty. If they aren't, stop — the research file is incomplete.
-   - **Decision-number parity.** Cross-check every proposed decision number in research §3 (subject "Proposed D-number" or equivalent) against research §5. **No renumbering** unless the operator has explicitly revised the research file on disk.
+   - **Decision-number parity.** Cross-check every proposed decision identifier in research §3 against research §5. **No renumbering** unless the operator has explicitly revised the research file on disk.
    - **Split mandate.** If research mandates a split (e.g. `splits_into: [<child-unit-id>...]` in research frontmatter), draft those child outlines or stop and escalate — do not demote a research-decided split to an "open question".
    - **Research override.** Any material design choice that diverges from research (formula change, schema change, module path change, **or lifecycle / status string literal change**) requires an explicit **Research override** note in §7 citing the operator's authorization. Silent divergence is forbidden.
 

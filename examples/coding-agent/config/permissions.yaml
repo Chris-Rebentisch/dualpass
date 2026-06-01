@@ -12,7 +12,6 @@ opt_in_skips:
   DUALPASS_SKIP_PRE_CODE_INDEPENDENT_REVIEW: false
   DUALPASS_SKIP_ARTIFACT_PREFLIGHT: false
   DUALPASS_SKIP_VERIFY_ARTIFACT_CLAIMS: false
-  DUALPASS_SKIP_COUNT_REBASE: false
 
 # Regex blocklist for actions that are NEVER allowed, regardless of posture.
 # Tune for your repo; the defaults catch the most common foot-guns.

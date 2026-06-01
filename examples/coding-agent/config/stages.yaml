@@ -30,7 +30,7 @@ stages:
     preflight_gates:
       - check-frontmatter
       - check-line-citations
-      - check-ac1-wording
+      - check-acceptance-criteria-wording
     max_rounds: 8
     requires_predecessor: outline
 

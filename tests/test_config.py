@@ -165,8 +165,8 @@ def test_validate_reports_yaml_parse_error(good_project: Path) -> None:
 def test_load_project_config_raises_on_invalid_data(good_project: Path) -> None:
     dp_path = good_project / "config" / "dualpass.json"
     data = json.loads(dp_path.read_text())
-    del data["version"]
+    del data["schema_version"]
     dp_path.write_text(json.dumps(data))
     with pytest.raises(ConfigError) as exc:
         load_project_config(good_project)
-    assert any("version" in e.message for e in exc.value.errors)
+    assert any("schema_version" in e.message for e in exc.value.errors)

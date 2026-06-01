@@ -6,7 +6,7 @@ artifacts_produced:
 success_criteria:
   - Every FINAL prompt CP has a Build History row (1-to-1, same labels)
   - Cumulative-test arithmetic reconciles header + Build History totals
-  - Every spec D-decision named in Locked Decisions (shipped or deferred)
+  - Every spec-locked decision named in Locked Decisions (shipped or deferred)
   - Every deviation classified with operator disposition
   - Next Build Target named
 ---
@@ -91,7 +91,7 @@ From round 2 onward, prepend `## Changes from v(N-1)` immediately after the head
     - **§3 Build History** — one CP table row per FINAL prompt CP, with actual test counts from the audit. CP labels mirror prompt labels.
     - **§4 Delivery Summary** — Files Created / Files Edited / Files NOT Edited, cross-checked against the prompt's files-in-scope list and the audit's files-shipped inventory.
     - **§5 Automated Validation Status** — one row per prompt §2 Final verification numbered item with the actual outcome from the audit re-run.
-    - **§6 Locked Decisions** — every D-number cited in the FINAL prompt, with `shipped` / `deferred` / `superseded` status. Deferred decisions need Owner + Fix-by + Registry pointer.
+    - **§6 Locked Decisions** — every decision cited in the FINAL prompt, with `shipped` / `deferred` / `superseded` status. Deferred decisions need Owner + Fix-by + Registry pointer.
     - **§7 Deviations / Notes** — each gap between FINAL prompt intent and audit's reported actual outcome, classified with operator disposition.
     - **§8 Operator Follow-up Checklist** — actionable items left for the operator.
     - **§9 Edits-to-Apply (operator)** — checklist of canonical-doc updates the handoff does NOT write directly. Omit entirely if no operator edits remain.
@@ -104,7 +104,7 @@ From round 2 onward, prepend `## Changes from v(N-1)` immediately after the head
     - Cumulative-test arithmetic reconciles across header + §5 Automated Validation Status + §3 Build History totals.
     - Every FINAL prompt §2 Final verification numbered item has a §5 row.
     - Every FINAL prompt §3 files-in-scope path appears in §4 Delivery Summary.
-    - Every D-number cited in the FINAL prompt is named in §6 Locked Decisions.
+    - Every decision cited in the FINAL prompt is named in §6 Locked Decisions.
     - Every FINAL prompt §8 doc-update requirement is either confirmed-on-disk or flagged in §9 Edits-to-Apply.
 
     **Linkage failures are blockers.**
@@ -119,7 +119,7 @@ From round 2 onward, prepend `## Changes from v(N-1)` immediately after the head
 
 - **Never proceed when audit FINAL is missing, ambiguous, FAIL-verdict, or PASS_WITH_DEVIATIONS without a deviations-accepted file.**
 - **Audit-trail linkage must validate before write.** Broken linkage = blocker.
-- **Decision numbers come from the FINAL prompt and audit.** The skill never invents in handoff mode. New decisions surface as upstream amendments.
+- **Decisions come from the FINAL prompt and audit.** The skill never invents decisions in handoff mode. New decisions surface as upstream amendments.
 - **CP labels mirror prompt labels.** Never renumber.
 - **Cumulative-test arithmetic reconciles exactly.** Disagreement = audit gap to surface.
 - **Length over 650 lines triggers an operator-review flag before writing.**
@@ -132,7 +132,7 @@ From round 2 onward, prepend `## Changes from v(N-1)` immediately after the head
 - **Drafting on a PASS_WITH_DEVIATIONS verdict without checking for the deviations-accepted file.** That gate is real — handoff is blocked until the operator either (a) lands a revised audit FINAL with `PASS`, or (b) writes the deviations-accepted file.
 - **Pattern-guessing the format from a single handoff.** Read 2–3 recent handoffs.
 - **Restating the prompt or spec inside the handoff.** Prompt = execution; spec = design; handoff = reality. When sections feel like re-narration, you've over-elaborated.
-- **Inventing decision numbers in handoff mode.** All D-numbers come from the prompt / audit.
+- **Inventing decisions in handoff mode.** All decisions come from the prompt / audit.
 - **Citing source files without absolute paths in operator-facing sections.** §9 Edits-to-Apply uses absolute or repo-relative paths; the operator may not be in your shell context.
 - **Listing typo fixes in Changes-from-v(N-1).** Material changes only.
 - **Writing a handoff with broken audit-trail linkage.** Build History rows that don't match prompt CPs, cumulative-test arithmetic that doesn't reconcile — fails the handoff's own audit.

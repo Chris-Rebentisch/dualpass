@@ -3,7 +3,7 @@
   "title": "dualpass project config",
   "type": "object",
   "required": [
-    "version",
+    "schema_version",
     "project_name",
     "unit_id_pattern",
     "max_revision_rounds",
@@ -15,9 +15,9 @@
   "additionalProperties": false,
   "properties": {
     "$schema": { "type": "string" },
-    "version": {
+    "schema_version": {
       "type": "string",
-      "description": "Config schema version. Must match a release dualpass understands."
+      "description": "Config schema version (e.g. '0.1.0'). Distinct from the dualpass package version; this tracks the shape of the config files only."
     },
     "project_name": { "type": "string", "minLength": 1 },
     "unit_id_pattern": {

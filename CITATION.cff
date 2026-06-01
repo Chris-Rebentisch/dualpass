@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "If you use dualpass in academic work, please cite it as below."
+title: dualpass
+abstract: "A reliability-first agent harness with cross-vendor agent-as-judge review as a built-in primitive."
+authors:
+  - family-names: Rebentisch
+    given-names: Chris
+url: "https://github.com/Chris-Rebentisch/dualpass"
+repository-code: "https://github.com/Chris-Rebentisch/dualpass"
+license: Apache-2.0
+version: 1.0.1
+date-released: 2026-06-01
+keywords:
+  - agent-harness
+  - agent-as-judge
+  - cross-vendor-review
+  - llm-orchestration
+  - pipeline-automation

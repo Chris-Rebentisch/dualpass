@@ -9,7 +9,7 @@ dualpass is at **v1.0.0** (feature-complete, production-ready). The threat surfa
 For security issues, please **do not open a public GitHub issue**. Instead:
 
 1. Open a [private security advisory](https://github.com/Chris-Rebentisch/dualpass/security/advisories/new) on GitHub, OR
-2. Email the maintainer (see profile contact on https://github.com/Chris-Rebentisch).
+2. Email: rbntsch@gmail.com with subject "dualpass security". We aim to acknowledge within 72 hours.
 
 Include:
 
@@ -18,7 +18,7 @@ Include:
 - The dualpass version (`dualpass --version`)
 - Your suggested remediation (optional)
 
-We will acknowledge within 5 business days and aim to confirm + fix within 30 days for high-severity issues.
+We aim to confirm + fix within 30 days for high-severity issues.
 
 ## Threat model — design-level considerations
 
@@ -49,6 +49,8 @@ The signature feature of dualpass — a different-vendor reviewer judging the au
 - **Compromised CLI binaries.** If your `claude` or `cursor-agent` binary is compromised, dualpass is compromised. Verify your CLI installations.
 - **Malicious skills.** A `SKILL.md` you download from an untrusted source can instruct the agent to do anything within its tool surface. Treat skills like code — review before use.
 - **Bypass-mode users.** If you opt into `default_posture: bypass` and run an agent against an untrusted prompt, the harness will not save you. Don't do that.
+
+When an agent CLI is granted all three legs of the lethal trifecta — untrusted input, private data access, external communication — a successful prompt injection becomes a data-exfiltration channel (see Simon Willison's writing on the topic). dualpass treats trifecta avoidance as the user's responsibility via `config/permissions.yaml` posture; the harness can constrain which tools an agent is allowed to call, but cannot decide for you whether a given combination is safe.
 
 ## Supported versions
 

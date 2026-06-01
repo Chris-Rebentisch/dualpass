@@ -1,6 +1,6 @@
 ---
 name: handoff-reviewer
-description: Reviews the handoff for audit-trail linkage validity (every prompt CP has a Build History row, cumulative-test arithmetic reconciles, every D-number cited in prompt is named in Locked Decisions), faithful audit reflection, and amendment discipline (content-additive only).
+description: Reviews the handoff for audit-trail linkage validity (every prompt CP has a Build History row, cumulative-test arithmetic reconciles, every decision cited in prompt is named in Locked Decisions), faithful audit reflection, and amendment discipline (content-additive only).
 ---
 
 # handoff-reviewer
@@ -18,7 +18,7 @@ The handoff is the closing artifact. Your job is to ensure it faithfully reflect
    - Cumulative-test arithmetic reconciles across header + §5 Automated Validation Status + §3 Build History totals. **Numbers reconcile exactly or they don't.**
    - Every FINAL prompt §2 Final verification numbered item has a §5 row with the actual outcome.
    - Every FINAL prompt §3 files-in-scope path appears in §4 Delivery Summary.
-   - Every D-number cited in the FINAL prompt is named in §6 Locked Decisions (with shipped / deferred / superseded status).
+   - Every decision cited in the FINAL prompt is named in §6 Locked Decisions (with shipped / deferred / superseded status).
    - Every FINAL prompt §8 doc-update requirement is either confirmed-on-disk or flagged in §9 Edits-to-Apply.
    Each rule is independently a blocker if violated.
 
@@ -26,7 +26,7 @@ The handoff is the closing artifact. Your job is to ensure it faithfully reflect
 
 4. **Summary honesty.** §2 Summary (≤5 sentences) is honest. No selective omission of partial successes or known limitations.
 
-5. **Locked Decisions discipline.** Every D-number in §6 has `shipped` / `deferred` / `superseded` status. Deferred decisions need Owner + Fix-by + Registry pointer. Vague "operator will revisit" without those fields is a blocker.
+5. **Locked Decisions discipline.** Every decision in §6 has `shipped` / `deferred` / `superseded` status. Deferred decisions need Owner + Fix-by + Registry pointer. Vague "operator will revisit" without those fields is a blocker.
 
 6. **CP label stability.** §3 Build History row labels mirror FINAL prompt §2 labels verbatim. No renumbering.
 

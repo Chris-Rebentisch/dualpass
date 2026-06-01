@@ -21,7 +21,7 @@ from dualpass.cli import main
 
 
 def test_version_constant_is_v1() -> None:
-    assert dualpass.__version__ == "1.0.0"
+    assert dualpass.__version__ == "1.0.1"
 
 
 def test_top_level_exports() -> None:

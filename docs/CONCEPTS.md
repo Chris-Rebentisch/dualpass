@@ -2,7 +2,7 @@
 
 dualpass is a thin, opinionated harness around the nine canonical components of a production LLM (Large Language Model — the neural network) agent system, with one feature elevated to first-class status: **cross-vendor independent review**.
 
-This document explains what each component does, where it lives in dualpass, and the specific reliability patterns dualpass ships as built-ins. If you are new to agent harness engineering, read [the foundations document](https://github.com/Chris-Rebentisch/dualpass/blob/main/docs/CONCEPTS.md) first — this file assumes you know what tool calling, RAG, and a context window are.
+This document explains what each component does, where it lives in dualpass, and the specific reliability patterns dualpass ships as built-ins. If you are new to agent harness engineering, read [the foundations document](FOUNDATIONS.md) first — this file assumes you know what tool calling, RAG, and a context window are.
 
 ---
 
@@ -55,7 +55,7 @@ The deterministic loop driver. The controller is plain Python code, not an LLM. 
 
 - **Loop control.** When to retry, when to bail, when to advance. Hard limits on revision rounds per stage (default: 6, configurable).
 - **Single-flight protection.** A lockfile at `.dualpass-state/<unit>-pipeline.lock.json` prevents two orchestrators from racing on the same unit. Watchers respect this lock and skip triggers when it's present.
-- **Circuit breaker.** If three consecutive auto-relaunches produce no measurable progress (same exit-signal, same artifact hash), the controller halts with a structured diagnostic at `.dualpass-state/<unit>-circuit-breaker-tripped.md`. The architect resets by deleting `.dualpass-state/<unit>-circuit-state.json`.
+- **Circuit breaker.** If three consecutive auto-relaunches produce no measurable progress (same exit-signal, same artifact hash), the controller halts with a structured diagnostic at `.dualpass-state/<unit>-circuit-tripped.md`. The architect resets by deleting `.dualpass-state/<unit>-circuit-state.json`.
 - **Auto-relaunch.** When a stage emits `exit_signal: continue`, the controller immediately relaunches a fresh subprocess — no architect intervention needed. Bounded by the circuit breaker.
 - **Stage breakpoints.** Configurable per-stage halt points let you stop the pipeline between phases without killing the process.
 
@@ -79,12 +79,14 @@ Two distinct surfaces:
 
 The context window is the working memory of one LLM call: system prompt + conversation history + retrieved documents + tool results. It is finite and precious.
 
-dualpass curates context explicitly via two builders:
+dualpass curates context explicitly via two builders, both wired into the controller (they run at the top of every stage round, before the author is invoked):
 
-- **Stage context bundle.** At the start of every stage, dualpass writes `.dualpass-state/<unit>-stage-context.md` — a compressed blob containing the relevant project-doc slices (PROJECT, DECISIONS, BACKLOG, DOC-MAP), the immediate-predecessor stage's FINAL artifact, and any stage-specific tech facts. Skills bootstrap from this file first; deep-reading canonical docs only happens when verification requires it.
-- **Precedent cache.** For stages whose author benefits from seeing recent peer artifacts (typically outline and spec), dualpass writes `.dualpass-state/<unit>-precedent-cache.md` — compressed extracts of the 2–3 most recent ratified peer stages.
+- **`build_stage_context`** writes `.dualpass-state/<unit>-stage-context.md` at stage start — a compressed blob containing the relevant project-doc slices (PROJECT, DECISIONS, BACKLOG, DOC-MAP, each capped per source), plus the immediate-predecessor stage's FINAL artifact (newest FINAL preferred, falling back to the newest non-FINAL draft if no FINAL exists yet). Skills bootstrap from this file first; deep-reading canonical docs only happens when verification requires it.
+- **`build_precedent_cache`** writes `.dualpass-state/<unit>-precedent-cache.md` for the `outline`, `spec`, and `prompt` stages — compressed extracts of FINAL artifacts for the same stage from the 2–3 most recent *other* units. Stages whose precedent value is structurally low (audit, handoff) skip this step; their predecessor artifact in the stage-context bundle is enough.
 
-**Why this matters.** Context degradation on long tasks is the #1 documented failure mode. Models are model-specific: stronger models tolerate longer context, weaker models need full resets bridged by external artifacts. dualpass's context strategy is configurable per project; do not hardcode the assumption that compaction is sufficient.
+Both writes are atomic (`.tmp` sibling + `os.replace`) and tolerate missing source files with explicit "(not found)" markers, so a half-populated project tree never produces a half-written prompt.
+
+**Why this matters.** Context degradation on long tasks is the #1 documented failure mode. Behavior here is model-specific: stronger models tolerate longer context, weaker models need full resets bridged by external artifacts. dualpass's context strategy is configurable per project; do not hardcode the assumption that compaction is sufficient.
 
 ---
 
@@ -100,12 +102,12 @@ dualpass's out-of-context memory has three tiers:
 | Tier | Lives at | Purpose |
 |---|---|---|
 | Ephemeral | `.dualpass-state/<unit>-*.{md,json,log}` | Per-unit build state: locks, markers, logs, frontmatter |
-| Per-unit artifacts | `units/<unit-id>/<stage>-v{N}{,-FINAL}.md` | The stage outputs themselves; the FINAL version is the ratified artifact |
+| Per-unit artifacts | `.dualpass-state/<unit>/<stage>-v{N}{,-FINAL}.md` | The stage outputs themselves; the FINAL version is the ratified artifact |
 | Project-level | `docs/_project/{PROJECT,DECISIONS,BACKLOG,DOC-MAP,RUNBOOK}.md` | Cross-unit truth: decisions registry, backlog status, doc map |
 
 **Why structured external artifacts beat in-context compaction.** Compaction summarizes *what* happened but loses *why*. Project-doc updates and unit artifacts preserve *why*. Anthropic's effective-harness research is explicit: cross-session continuity for long-running agents requires explicit artifacts (progress files, git commits, JSON feature lists), not compaction alone.
 
-dualpass writes per-stage build markers to `.dualpass-state/<unit>-build-complete.md` with required frontmatter:
+The author emits a per-stage build-complete marker at `.dualpass-state/<unit>-build-complete.md` with required YAML frontmatter:
 
 ```yaml
 ---
@@ -115,39 +117,25 @@ status: complete            # partial | complete | blocked
 exit_signal: continue       # stop | continue | escalate
 blocker_kind: null          # null | architectural | infrastructure | spec_defect
 artifacts_produced:
-  - units/demo-001/code-v3-FINAL.md
+  - .dualpass-state/demo-001/code-v3-FINAL.md
 ---
 ```
 
-The controller parses this on stage exit and acts on `exit_signal`.
+`memory.read_build_marker` parses and validates this file (enum checks on `status`, `exit_signal`, `blocker_kind`; required-field checks; unit-id match), and the controller calls it on every stage round and honors `exit_signal`. If the author emits `exit_signal: stop`, the controller writes `.dualpass-state/<unit>-stuck-author-stop.md` and halts cleanly. `exit_signal: escalate` is similar but signals architect-decision-needed (the stuck marker is named `…-stuck-author-escalate.md`). Malformed markers are logged and treated as absent — the controller never wedges on bad frontmatter.
 
 ---
 
-## 6. Sub-agents — declared per stage skill
+## 6. Sub-agents — roadmap note
 
-A sub-agent is a separately-invoked instance of the agent loop running in its own isolated context window. The parent agent calls the sub-agent as if it were a tool; the sub-agent does its work; only the final result returns to the parent.
+Sub-agent orchestration (one agent spawning a separately-invoked instance with its own isolated context window) is a documented affordance that dualpass v1.0 does **not** directly orchestrate. In v1, sub-agents — if any are used at all — are the responsibility of the agent CLI itself: Claude Code's Agent tool, Cursor's sub-agents, and analogous mechanisms in other vendor CLIs.
 
-In dualpass, stage skills declare sub-agent specs in their frontmatter:
+dualpass treats each stage as one author + one reviewer (or, when `dual_pass_reviewer: true`, one author + two parallel reviewers). Any further decomposition into sub-agents *within* a stage is opaque to the harness; the controller sees one author invocation and one verdict per pass.
 
-```yaml
----
-name: outline-author
-sub_agents:
-  - name: precedent-summarizer
-    prompt: "Summarize chunk-{prior}-outline-FINAL.md in 200 words..."
-    tools: [read_file]
-    context_cap_tokens: 8000
----
-```
+This is intentional. Re-implementing what shipped CLI agents already do well — context isolation, parallel fanout, result aggregation — would duplicate effort and constrain users to dualpass's chosen orchestration model.
 
-**Why sub-agents.** Two reasons, per Anthropic engineering:
+Cognition Labs' "Don't Build Multi-Agents" caution also applies here: when the task is deeply interdependent, splitting work across isolated sub-agent contexts loses information that hurts quality. Letting the CLI agent (or the author themselves) make that judgment per-stage is the conservative default.
 
-1. **Context isolation.** The parent's context never sees the sub-agent's intermediate tool calls and reasoning — only the final summary. Keeps the parent lean.
-2. **Parallelization.** Multiple sub-agents can run concurrently; the parent waits for all to return.
-
-**When NOT to use sub-agents.** When the parent needs the sub-agent's intermediate reasoning to make its own decisions. Cognition Labs has documented this case (their "Don't Build Multi-Agents" position): if the work is deeply interdependent, splitting it across isolated contexts loses information that hurts quality.
-
-dualpass takes no side. Sub-agents are an optional skill-declared affordance; use them when the task shape rewards isolation.
+A v1.1 candidate is a `sub_agents:` block in stage-skill frontmatter that the controller can wire when the underlying CLI agent doesn't natively support sub-agents. Not in v1.0.
 
 ---
 
@@ -198,9 +186,10 @@ dualpass's observability surface:
 - **Per-turn message logs.** `.dualpass-state/logs/<unit>-<stage>-r<round>-<iso-timestamp>-try<N>.log` — the full conversation, replayable.
 - **Tool-execution logs.** Implicit in the message logs (tool calls + results are inline).
 - **Structured event log.** `.dualpass-state/<unit>-events.jsonl` — one JSON object per state transition. Machine-readable for downstream tooling.
-- **Cost ledger.** `.dualpass-state/<unit>-cost-summary.md` — running tally of token usage and (where the CLI reports it) dollars spent.
-- **Markers.** `<unit>-build-complete.md`, `<unit>-pipeline-closed.md`, `<unit>-circuit-breaker-tripped.md`, `<unit>-stuck-<reason>.md`.
+- **Markers.** `<unit>-build-complete.md`, `<unit>-pipeline-closed.md`, `<unit>-circuit-tripped.md`, `<unit>-stuck-<reason>.md`.
 - **`dualpass status [--unit <id>]`** — human-readable rollup that reads all of the above and renders the current pipeline state.
+
+**Token and cost accounting are intentionally out of scope in v1.** Provider CLIs report this directly; per-CLI extraction couples the harness to vendor-specific output shapes. `dualpass status` surfaces stage timing; pair it with your provider's cost dashboard when you need the financial view.
 
 **Build observability first, not last.** It is the boring component you regret skipping.
 
@@ -227,15 +216,21 @@ When a stage cannot proceed and the failure needs human judgment, dualpass write
 
 ### Pattern 3: Architect deviations-accepted override
 
-When an audit verdict comes back as `PASS_WITH_DEVIATIONS` and the deviations are pre-existing co-tenant debt (not introduced by this unit), re-auditing in a loop discovers nothing new — it just burns budget. The architect resolves by writing `units/<unit-id>/audit-FINAL-deviations-accepted.md` citing the precedent. dualpass's handoff gate honors this file and proceeds.
+When an audit verdict comes back as `PASS_WITH_DEVIATIONS` and the deviations are pre-existing co-tenant debt (not introduced by this unit), re-auditing in a loop discovers nothing new — it just burns budget. The architect resolves by writing `.dualpass-state/<unit>/audit-FINAL-deviations-accepted.md` citing the precedent. dualpass's handoff gate honors this file and proceeds.
 
 This is a deliberate trust escalation — humans accept known issues, machines proceed.
 
 ### Pattern 4: Retrospective-as-first-class
 
-Every unit produces a retrospective fragment at `units/<unit-id>/retro.md`. Friction patterns, new issues, recommended fixes (to a skill, gate, or controller behavior). The `dualpass retro <unit-range>` command aggregates these into a campaign retrospective at `docs/_project/RETROSPECTIVES/<range>.md`.
+Every unit produces a retrospective fragment at `docs/_project/RETROSPECTIVES/<unit>.md` (seeded by `dualpass retro --unit <unit>` if missing). Friction patterns, new issues, recommended fixes (to a skill, gate, or controller behavior).
 
-The retrospective is not a feel-good document — it is the input to pattern hardening. When a friction pattern repeats across units, that is the signal to write a new gate, update a skill, or patch the controller. Humans do the patching; dualpass surfaces the signal.
+`dualpass retro --range 001..010 --output rollup.md` aggregates the matching per-unit retros into one rollup, with a "Patterns across N units" section that pulls real signal from the unit event logs and retro bodies:
+
+- An event-type frequency table grouped by `(stage, event_type)` with per-unit averages and "units with >= 1" counts.
+- A "Recurring friction" list — `(stage, event_type)` pairs that appeared in more than half of the units in the range.
+- A "Candidate cross-unit patterns" list — unigram and bigram keywords from the `## What went wrong`, `## Changes for next time`, and `## Friction patterns` sections of each unit's retro, surfaced when they appear in three or more units.
+
+Humans do the patching — write a new gate, update a skill, edit the controller. The retro tool does the signal extraction so the operator's first look is at concentrated evidence, not raw event logs.
 
 ---
 

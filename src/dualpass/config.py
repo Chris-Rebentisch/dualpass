@@ -47,7 +47,7 @@ class ValidationError:
 class ProjectConfig:
     """Top-level harness config from `config/dualpass.json`."""
 
-    version: str
+    schema_version: str
     project_name: str
     unit_id_pattern: str
     max_revision_rounds: dict[str, int]
@@ -213,7 +213,7 @@ def load_project_config(project_root: Path) -> ProjectConfig:
     if errors:
         raise ConfigError(errors)
     return ProjectConfig(
-        version=data["version"],
+        schema_version=data["schema_version"],
         project_name=data["project_name"],
         unit_id_pattern=data["unit_id_pattern"],
         max_revision_rounds=dict(data["max_revision_rounds"]),
@@ -363,6 +363,27 @@ def _cross_file_checks(project_root: Path) -> list[ValidationError]:
                 )
             )
         seen.add(stage.name)
+
+    # Stages: every preflight_gates entry must resolve to a registered gate.
+    # We import here to avoid a circular import at module load: gates/__init__.py
+    # registers built-ins at import time, which is fine, but keeping the import
+    # local also lets tests register custom gates before validate() runs.
+    from dualpass import gates as _gates
+
+    registered = _gates.list_gates()
+    registered_repr = ", ".join(registered) if registered else "(none registered)"
+    for stage in stages:
+        for gate_name in stage.preflight_gates:
+            if _gates.get_gate(gate_name) is None:
+                out.append(
+                    ValidationError(
+                        file="config/stages.yaml",
+                        path=f"stages[{stage.name}].preflight_gates",
+                        message=(
+                            f"unknown gate '{gate_name}' (registered: {registered_repr})"
+                        ),
+                    )
+                )
 
     # Project: every breakpoint key must be a real stage name.
     stage_names = {s.name for s in stages}

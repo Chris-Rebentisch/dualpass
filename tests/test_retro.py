@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import json
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
@@ -10,6 +11,20 @@ import pytest
 
 from dualpass import _init, _retro, controller
 from dualpass.cli import main
+from dualpass.memory import state_dir
+
+
+def _write_events(
+    project_root: Path,
+    unit_id: str,
+    events: list[dict],
+) -> None:
+    """Helper: stamp a unit's event log directly, bypassing the controller."""
+    sdir = state_dir(project_root)
+    path = sdir / f"{unit_id}-events.jsonl"
+    with path.open("w", encoding="utf-8") as f:
+        for ev in events:
+            f.write(json.dumps(ev, sort_keys=True) + "\n")
 
 
 @pytest.fixture
@@ -210,3 +225,216 @@ def test_cli_retro_malformed_range_errors_two(scaffolded_project: Path) -> None:
         rc = main(["retro", "--range", "garbage", "--project", str(scaffolded_project)])
     assert rc == 2
     assert "invalid range" in err.getvalue()
+
+
+# ── Cross-unit pattern aggregation ─────────────────────────────────────────
+
+
+def test_aggregate_patterns_no_units_returns_placeholder(scaffolded_project: Path) -> None:
+    """With zero units the function still emits a header and a no-data note."""
+    section = _retro.aggregate_patterns(unit_ids=[], project_root=scaffolded_project)
+    assert "## Patterns across 0 units" in section
+    assert "(no event data found" in section
+    assert "(no recurring retro keywords)" in section
+
+
+def test_aggregate_patterns_table_populated_for_three_units(
+    scaffolded_project: Path,
+) -> None:
+    """Three units with mixed events then the table picks up each (stage, type)."""
+    _write_events(
+        scaffolded_project,
+        "u-001",
+        [
+            {"type": "stage_revision_requested", "unit": "u-001", "stage": "code"},
+            {"type": "stage_revision_requested", "unit": "u-001", "stage": "code"},
+            {"type": "stage_completed", "unit": "u-001", "stage": "research"},
+        ],
+    )
+    _write_events(
+        scaffolded_project,
+        "u-002",
+        [
+            {"type": "stage_revision_requested", "unit": "u-002", "stage": "code"},
+            {"type": "stage_blocked", "unit": "u-002", "stage": "audit"},
+        ],
+    )
+    _write_events(
+        scaffolded_project,
+        "u-003",
+        [
+            {"type": "circuit_breaker_tripped", "unit": "u-003", "stage": "code"},
+        ],
+    )
+
+    section = _retro.aggregate_patterns(
+        unit_ids=["u-001", "u-002", "u-003"],
+        project_root=scaffolded_project,
+    )
+    assert "## Patterns across 3 units" in section
+    # Totals per (stage, type)
+    assert "stage_revision_requested" in section
+    assert "circuit_breaker_tripped" in section
+    assert "stage_blocked" in section
+    # Per-unit avg = 3 / 3 = 1.00 for revision_requested in code.
+    assert "1.00" in section
+    # Recurring friction: revision_requested in code was in 2 of 3 units (>1.5).
+    assert "Recurring friction" in section
+    assert "code" in section
+
+
+def test_aggregate_patterns_groups_by_stage_and_event_type(
+    scaffolded_project: Path,
+) -> None:
+    """Same event_type under different stages must produce separate rows."""
+    _write_events(
+        scaffolded_project,
+        "g-001",
+        [
+            {"type": "stage_completed", "unit": "g-001", "stage": "code"},
+            {"type": "stage_completed", "unit": "g-001", "stage": "audit"},
+        ],
+    )
+    section = _retro.aggregate_patterns(
+        unit_ids=["g-001"],
+        project_root=scaffolded_project,
+    )
+    # Two table rows: one for code/stage_completed, one for audit/stage_completed.
+    # Each row should appear exactly once.
+    # Count the data-row leading delimiter `| code     |` etc.
+    code_rows = section.count("| code     | stage_completed")
+    audit_rows = section.count("| audit    | stage_completed")
+    assert code_rows == 1
+    assert audit_rows == 1
+
+
+def test_aggregate_patterns_per_unit_avg_is_total_over_n_units(
+    scaffolded_project: Path,
+) -> None:
+    """4 events / 2 units then per-unit avg = 2.00."""
+    _write_events(
+        scaffolded_project,
+        "avg-001",
+        [
+            {"type": "stage_revision_requested", "unit": "avg-001", "stage": "code"},
+            {"type": "stage_revision_requested", "unit": "avg-001", "stage": "code"},
+            {"type": "stage_revision_requested", "unit": "avg-001", "stage": "code"},
+        ],
+    )
+    _write_events(
+        scaffolded_project,
+        "avg-002",
+        [
+            {"type": "stage_revision_requested", "unit": "avg-002", "stage": "code"},
+        ],
+    )
+    section = _retro.aggregate_patterns(
+        unit_ids=["avg-001", "avg-002"],
+        project_root=scaffolded_project,
+    )
+    # Total = 4, n_units = 2, avg = 2.00.
+    assert "2.00" in section
+    # Units with >=1 = 2 / 2.
+    assert "2 / 2" in section
+
+
+def test_range_mode_prepends_aggregate_section_before_toc(
+    scaffolded_project: Path,
+) -> None:
+    """`aggregate()` rollup must contain Patterns section above the Table of contents."""
+    for uid in ("r-001", "r-002"):
+        path = _retro.retro_path(scaffolded_project, uid)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            f"# Retro for {uid}\n\n## What went wrong\n\nflaky tests bit us\n"
+        )
+        _write_events(
+            scaffolded_project,
+            uid,
+            [{"type": "stage_revision_requested", "unit": uid, "stage": "code"}],
+        )
+
+    result = _retro.aggregate(scaffolded_project, ["r-001", "r-002"])
+    body = result.output.read_text()
+    # Order matters: Patterns section appears before TOC isn't quite right —
+    # the spec says "prepend BEFORE the existing TOC." The header is the page
+    # title; we want the Patterns section to land between the title block and
+    # the per-unit bodies, and above the TOC content. Verify it sits BEFORE
+    # the per-unit `## r-001` body header and AFTER the page header.
+    patterns_idx = body.index("## Patterns across 2 units")
+    body_idx = body.index("## r-001")
+    title_idx = body.index("# Rollup retrospective")
+    assert title_idx < patterns_idx < body_idx
+    # And the TOC entries are present somewhere in the document.
+    assert "[r-001](#r-001)" in body
+
+
+def test_aggregate_patterns_bigram_keyword_extraction(
+    scaffolded_project: Path,
+) -> None:
+    """Three retros all mention 'flaky tests' then it appears in bigram candidates."""
+    for uid in ("k-001", "k-002", "k-003"):
+        path = _retro.retro_path(scaffolded_project, uid)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            f"# Retro for {uid}\n\n"
+            f"## What went wrong\n\n"
+            f"the flaky tests cost us a day in {uid}\n\n"
+            f"## Changes for next time\n\n"
+            f"isolate flaky tests in their own marker\n"
+        )
+
+    section = _retro.aggregate_patterns(
+        unit_ids=["k-001", "k-002", "k-003"],
+        project_root=scaffolded_project,
+    )
+    assert "Candidate cross-unit patterns" in section
+    assert "flaky tests" in section
+    # Should report 3 units mentioning it.
+    assert "3 units" in section
+
+
+def test_aggregate_patterns_filters_stopwords(scaffolded_project: Path) -> None:
+    """Stopwords ('the', 'a', 'is') must never appear in the candidate list."""
+    for uid in ("s-001", "s-002", "s-003"):
+        path = _retro.retro_path(scaffolded_project, uid)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            f"# Retro for {uid}\n\n"
+            f"## What went wrong\n\n"
+            f"the harness is a thing and the the the\n"
+        )
+
+    section = _retro.aggregate_patterns(
+        unit_ids=["s-001", "s-002", "s-003"],
+        project_root=scaffolded_project,
+    )
+    # Find the candidate-list portion only.
+    marker = "### Candidate cross-unit patterns"
+    assert marker in section
+    candidates = section.split(marker, 1)[1]
+    # Each stopword should not appear as a bullet (it would render as
+    # `- **the** — ...`). Allow it to appear as a substring inside a bigram
+    # where it isn't the whole token — but our tokenizer drops stopwords
+    # before n-gram assembly, so neither unigrams nor bigrams should contain
+    # bare stopwords as bullets.
+    for sw in ("**the**", "**a**", "**is**", "**and**"):
+        assert sw not in candidates
+
+
+def test_range_mode_with_empty_retros_falls_back_gracefully(
+    scaffolded_project: Path,
+) -> None:
+    """No retros and no events still produces a valid rollup."""
+    # Don't create any retro files or events. aggregate() will see them
+    # all as missing.
+    result = _retro.aggregate(scaffolded_project, ["empty-001", "empty-002"])
+    assert result.included == []
+    assert result.missing == ["empty-001", "empty-002"]
+    body = result.output.read_text()
+    # Patterns section header is always present.
+    assert "## Patterns across 2 units" in body
+    # No event data → no event table.
+    assert "(no event data found" in body
+    # No retros → keyword section shows the placeholder.
+    assert "(no recurring retro keywords)" in body

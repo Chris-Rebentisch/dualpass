@@ -36,6 +36,8 @@ Out of scope for v1 (signature stubs only):
 from __future__ import annotations
 
 import hashlib
+import logging
+import shutil
 import sys
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -44,9 +46,14 @@ from typing import Literal
 
 from dualpass import config as _config
 from dualpass import providers
+from dualpass.context import build_precedent_cache, build_stage_context
+from dualpass.gates import GateContext, GateResult, run_gates
 from dualpass.memory import (
+    BuildMarker,
+    BuildMarkerError,
     acquire_lock,
     lock_present,
+    read_build_marker,
     read_lock,
     release_lock,
     state_dir,
@@ -61,8 +68,16 @@ from dualpass.providers import (
     StageContext,
 )
 
+logger = logging.getLogger(__name__)
+
 StageStatus = Literal["pending", "in_flight", "complete", "blocked", "skipped"]
 ExitSignal = Literal["stop", "continue", "escalate"]
+
+# Stages for which a precedent-cache bundle is built ahead of the author.
+# These are the stages where peer artifacts from prior units carry the most
+# signal — for purely structural stages (audit, handoff) the predecessor
+# artifact already in the stage-context bundle is enough.
+PRECEDENT_STAGES: frozenset[str] = frozenset({"outline", "spec", "prompt"})
 
 
 @dataclass
@@ -222,6 +237,208 @@ def run_unit(
 # ── Internals ───────────────────────────────────────────────────────────────
 
 
+def _predecessor_stage_for(stages: tuple, current_name: str) -> str | None:
+    """Return the configured `requires_predecessor` (or position-derived prior)."""
+    for i, stage in enumerate(stages):
+        if stage.name != current_name:
+            continue
+        if stage.requires_predecessor:
+            return stage.requires_predecessor
+        if i > 0:
+            return stages[i - 1].name
+        return None
+    return None
+
+
+def _build_context_artifacts(
+    *,
+    unit_id: str,
+    stage_name: str,
+    project_root: Path,
+    predecessor_stage: str | None,
+) -> None:
+    """Build stage-context bundle + (where relevant) precedent cache.
+
+    Failures here must never kill the pipeline — the agent still has the unit
+    id and stage name and can produce *something* without the bundle. Log so
+    operators notice the degradation in the next status check.
+    """
+    try:
+        build_stage_context(
+            unit_id=unit_id,
+            stage=stage_name,
+            project_root=project_root,
+            predecessor_stage=predecessor_stage,
+        )
+    except Exception as exc:
+        logger.warning(
+            "controller: build_stage_context failed for unit=%s stage=%s: %s",
+            unit_id,
+            stage_name,
+            exc,
+        )
+
+    if stage_name in PRECEDENT_STAGES:
+        try:
+            build_precedent_cache(
+                unit_id=unit_id,
+                stage=stage_name,
+                project_root=project_root,
+            )
+        except Exception as exc:
+            logger.warning(
+                "controller: build_precedent_cache failed for unit=%s stage=%s: %s",
+                unit_id,
+                stage_name,
+                exc,
+            )
+
+
+def _read_marker_safely(unit_id: str, stage_name: str, project_root: Path) -> BuildMarker | None:
+    """Return the build marker for the current stage, or None on any problem.
+
+    A marker for a *different* stage is treated as stale debris from an earlier
+    run and ignored. A malformed marker is logged but does not halt the loop —
+    the controller continues as if no marker were present (graceful
+    degradation).
+    """
+    try:
+        marker = read_build_marker(unit_id, project_root)
+    except BuildMarkerError as exc:
+        logger.warning(
+            "controller: malformed build marker for unit=%s — ignoring: %s",
+            unit_id,
+            exc,
+        )
+        return None
+    if marker is None:
+        return None
+    if marker.stage != stage_name:
+        # Stale marker from a previous stage of this unit; ignore.
+        return None
+    return marker
+
+
+def _write_stuck_marker(
+    project_root: Path,
+    unit_id: str,
+    stage_name: str,
+    *,
+    kind: Literal["author-stop", "author-escalate"],
+    reason: str,
+) -> Path:
+    """Drop a stuck-* marker next to the unit's other state so operators see it."""
+    marker = state_dir(project_root) / f"{unit_id}-stuck-{kind}.md"
+    marker.write_text(
+        f"# Author halted the run ({kind})\n\n"
+        f"- **unit:** `{unit_id}`\n"
+        f"- **stage:** `{stage_name}`\n"
+        f"- **halted at:** {datetime.now(UTC).isoformat()}\n"
+        f"- **reason:** {reason}\n\n"
+        f"## What this means\n\n"
+        f"The author wrote a build-complete marker requesting a halt before the\n"
+        f"reviewer ran. The pipeline stopped cleanly so the operator can\n"
+        f"inspect the situation.\n\n"
+        f"## What to do\n\n"
+        f"1. Inspect the marker at `.dualpass-state/{unit_id}-build-complete.md`\n"
+        f"2. Inspect the artifact under `.dualpass-state/{unit_id}/`\n"
+        f"3. Address the reason, then re-run with:\n"
+        f"   `dualpass run --unit {unit_id} --from-stage {stage_name}`\n",
+        encoding="utf-8",
+    )
+    return marker
+
+
+def _format_gate_feedback(failures: list[GateResult], stage_name: str, round_number: int) -> str:
+    """Render failed-gate diagnostics into a single revision-feedback document."""
+    lines = [
+        f"# Preflight gate feedback — stage {stage_name!r}, round {round_number}",
+        "",
+        (
+            "One or more preflight gates failed against the artifact you just\n"
+            "produced. The reviewer was *not* launched. Address the findings\n"
+            "below and re-produce the artifact for the next round."
+        ),
+        "",
+    ]
+    for i, result in enumerate(failures, start=1):
+        lines.append(f"## Finding {i}")
+        lines.append("")
+        lines.append(result.diagnostic)
+        if result.citations:
+            lines.append("")
+            lines.append("Citations:")
+            for file_path, line_no in result.citations:
+                lines.append(f"- {file_path}:{line_no}")
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _gate_failure_summary(failures: list[GateResult]) -> list[str]:
+    """One-line summary per failed gate for inclusion in the event payload."""
+    out: list[str] = []
+    for result in failures:
+        first_line = result.diagnostic.splitlines()[0] if result.diagnostic else ""
+        out.append(first_line.strip()[:200])
+    return out
+
+
+def _maybe_lock_final(stage, artifact_path: Path, cfg, run: UnitRun) -> None:
+    """If `auto_lock_finals` is true, copy the approved artifact to its FINAL name.
+
+    Emits `stage_finalized` with the final-copy path on success. Failure is
+    non-fatal — we log and continue so a filesystem hiccup never wedges the
+    pipeline at an otherwise-good approval.
+    """
+    if not getattr(cfg.project, "auto_lock_finals", False):
+        return
+    try:
+        final_path = _lock_artifact_as_final(artifact_path)
+    except OSError as exc:
+        logger.warning(
+            "controller: auto_lock_finals copy failed for unit=%s stage=%s: %s",
+            run.unit_id,
+            stage.name,
+            exc,
+        )
+        return
+    emit(
+        Event(
+            "stage_finalized",
+            unit=run.unit_id,
+            stage=stage.name,
+            payload={
+                "artifact": str(artifact_path),
+                "final": str(final_path),
+            },
+        ),
+        project_root=run.project_root,
+    )
+
+
+def _lock_artifact_as_final(artifact_path: Path) -> Path:
+    """Copy `<stage>-artifact-v<N>.md` to `<stage>-v<N>-FINAL.md` next to it.
+
+    The FINAL filename uses the spec's `<stage>-v<N>-FINAL.md` shape (no
+    `artifact` infix) so downstream tooling can spot the locked copy without
+    parsing version numbers.
+    """
+    name = artifact_path.name
+    # Strip the artifact-* infix if present so we land on `<stage>-v<N>-FINAL.md`.
+    # Examples handled:
+    #   research-artifact-v1.md → research-v1-FINAL.md
+    #   spec-artifact-v3.md     → spec-v3-FINAL.md
+    # Strip the `-artifact-` infix if present (e.g. `research-v1.md`), then add
+    # the `-FINAL` suffix before the `.md` extension.
+    stem = name.replace("-artifact-", "-", 1) if "-artifact-" in name else name
+    final_name = (
+        stem[: -len(".md")] + "-FINAL.md" if stem.endswith(".md") else stem + "-FINAL"
+    )
+    target = artifact_path.parent / final_name
+    shutil.copy2(artifact_path, target)
+    return target
+
+
 def _invoke_dual_reviewers(
     provider_impl: Provider, ctx: StageContext, author: AuthorResult
 ) -> list[ReviewResult]:
@@ -328,8 +545,22 @@ def _run_stage(stage, provider_impl: Provider, run: UnitRun, cfg) -> StageResult
     no_progress_streak = 0
     last_artifact_hash: str | None = None
 
+    predecessor_stage = _predecessor_stage_for(cfg.stages.stages, stage.name)
+
     for round_number in range(1, max_rounds + 1):
         rounds_used = round_number
+
+        # Build context artifacts at the top of every round so a revision pass
+        # picks up the latest predecessor + peer state. Failures are logged but
+        # never fatal: the agent retains enough signal from stage name + unit id
+        # to proceed in a degraded mode.
+        _build_context_artifacts(
+            unit_id=run.unit_id,
+            stage_name=stage.name,
+            project_root=run.project_root,
+            predecessor_stage=predecessor_stage,
+        )
+
         emit(
             Event(
                 "stage_round_started",
@@ -349,6 +580,51 @@ def _run_stage(stage, provider_impl: Provider, run: UnitRun, cfg) -> StageResult
         )
         author = provider_impl.invoke_author(ctx)
         last_artifact = author
+
+        # Author-driven halt: if the author emitted a build-complete marker
+        # naming this stage with a stop/escalate signal, honor it before any
+        # reviewer or gate runs. Reviewer rejections never halt the pipeline;
+        # this is the only path that does.
+        marker = _read_marker_safely(run.unit_id, stage.name, run.project_root)
+        if marker is not None and marker.exit_signal in ("stop", "escalate"):
+            reason = str(marker.metadata.get("reason", f"author requested {marker.exit_signal}"))
+            kind: Literal["author-stop", "author-escalate"] = (
+                "author-escalate" if marker.exit_signal == "escalate" else "author-stop"
+            )
+            stuck_path = _write_stuck_marker(
+                run.project_root,
+                run.unit_id,
+                stage.name,
+                kind=kind,
+                reason=reason,
+            )
+            event_payload: dict[str, object] = {
+                "round": round_number,
+                "reason": reason,
+                "exit_signal": marker.exit_signal,
+                "stuck_marker": str(stuck_path),
+                "blocker_kind": marker.blocker_kind,
+            }
+            if marker.exit_signal == "escalate":
+                event_payload["escalated"] = True
+            emit(
+                Event(
+                    "stage_blocked",
+                    unit=run.unit_id,
+                    stage=stage.name,
+                    payload=event_payload,
+                ),
+                project_root=run.project_root,
+            )
+            return StageResult(
+                stage=stage.name,
+                status="blocked",
+                exit_signal="stop",
+                artifact_path=author.artifact_path,
+                rounds_used=rounds_used,
+                blocker_kind=f"author_requested_{marker.exit_signal}",
+                blocker_detail=reason,
+            )
 
         # Hash the artifact body to drive circuit-breaker progress detection.
         # We rehash every round; if identical content shows up `breaker_threshold`
@@ -379,6 +655,7 @@ def _run_stage(stage, provider_impl: Provider, run: UnitRun, cfg) -> StageResult
                 ),
                 project_root=run.project_root,
             )
+            _maybe_lock_final(stage, author.artifact_path, cfg, run)
             return StageResult(
                 stage=stage.name,
                 status="complete",
@@ -386,6 +663,98 @@ def _run_stage(stage, provider_impl: Provider, run: UnitRun, cfg) -> StageResult
                 artifact_path=author.artifact_path,
                 rounds_used=rounds_used,
             )
+
+        # Preflight gates: run BEFORE any reviewer subprocess so a known-bad
+        # artifact (missing frontmatter, stale citations, brittle wording, …)
+        # gets caught by a cheap deterministic check instead of burning a
+        # reviewer round. A failed gate is treated as an auto-revision: the
+        # diagnostics are written to a feedback sidecar that the next-round
+        # author can read, and the reviewer is skipped this round.
+        if stage.preflight_gates:
+            gate_ctx = GateContext(
+                unit_id=run.unit_id,
+                stage=stage.name,
+                project_root=run.project_root,
+                artifact_path=author.artifact_path,
+            )
+            gate_results = run_gates(list(stage.preflight_gates), gate_ctx)
+            failed = [r for r in gate_results if not r.passed]
+            if failed:
+                feedback_path = (
+                    udir / f"{stage.name}-gate-feedback-v{round_number}.md"
+                )
+                feedback_path.write_text(
+                    _format_gate_feedback(failed, stage.name, round_number),
+                    encoding="utf-8",
+                )
+                emit(
+                    Event(
+                        "gate_failed",
+                        unit=run.unit_id,
+                        stage=stage.name,
+                        payload={
+                            "round": round_number,
+                            "failed_gates": _gate_failure_summary(failed),
+                            "feedback_path": str(feedback_path),
+                        },
+                    ),
+                    project_root=run.project_root,
+                )
+                # Mark this round as no-progress for the circuit breaker
+                # bookkeeping (so a stuck author + stuck gate combination still
+                # trips eventually) and fall through to the next round without
+                # invoking the reviewer.
+                emit(
+                    Event(
+                        "stage_revision_requested",
+                        unit=run.unit_id,
+                        stage=stage.name,
+                        payload={
+                            "round": round_number,
+                            "verdict": "rejected_by_gate",
+                            "no_progress_streak": no_progress_streak,
+                            "feedback_path": str(feedback_path),
+                        },
+                    ),
+                    project_root=run.project_root,
+                )
+                if breaker_threshold > 0 and no_progress_streak >= breaker_threshold:
+                    _write_circuit_breaker_marker(
+                        run.project_root,
+                        run.unit_id,
+                        stage.name,
+                        rounds_used,
+                        breaker_threshold,
+                        last_artifact_hash or "",
+                    )
+                    emit(
+                        Event(
+                            "circuit_breaker_tripped",
+                            unit=run.unit_id,
+                            stage=stage.name,
+                            payload={
+                                "rounds_used": rounds_used,
+                                "threshold": breaker_threshold,
+                                "artifact_hash": last_artifact_hash,
+                                "tripped_by": "gate_failure",
+                            },
+                        ),
+                        project_root=run.project_root,
+                    )
+                    return StageResult(
+                        stage=stage.name,
+                        status="blocked",
+                        exit_signal="stop",
+                        artifact_path=author.artifact_path,
+                        rounds_used=rounds_used,
+                        blocker_kind="circuit_breaker_tripped",
+                        blocker_detail=(
+                            f"preflight gates kept failing on identical artifacts "
+                            f"for {no_progress_streak + 1} consecutive rounds "
+                            f"(threshold={breaker_threshold})"
+                        ),
+                    )
+                continue
 
         # Reviewer pass — single-vendor or dual-vendor parallel depending on
         # the stage's `dual_pass_reviewer` flag. Dual-pass requires BOTH
@@ -425,6 +794,7 @@ def _run_stage(stage, provider_impl: Provider, run: UnitRun, cfg) -> StageResult
                 ),
                 project_root=run.project_root,
             )
+            _maybe_lock_final(stage, author.artifact_path, cfg, run)
             return StageResult(
                 stage=stage.name,
                 status="complete",

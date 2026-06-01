@@ -4,7 +4,6 @@ One directory per stage. Each directory contains:
 
 - `SKILL.md` — the author agent's instructions (Anthropic skill format: YAML frontmatter + markdown body)
 - `REVIEWER.md` — the reviewer agent's instructions (same format, different perspective)
-- `references/` (optional) — additional in-context material the agent can read
 
 ## Skill structure (Anthropic format)
 
@@ -12,12 +11,11 @@ One directory per stage. Each directory contains:
 ---
 name: <stage>-author
 description: One-sentence description of what this skill produces.
-sub_agents: []                  # optional — declare sub-agents here
 context_sources:                # files the agent should read first
-  - units/{unit_id}/<predecessor>-FINAL.md
-  - .dualpass-state/{unit_id}-stage-context.md
+  - .dualpass-state/{unit}/<predecessor>-FINAL.md
+  - .dualpass-state/{unit}-stage-context.md
 artifacts_produced:
-  - units/{unit_id}/<stage>-v{round}.md
+  - .dualpass-state/{unit}/<stage>-v{round}.md
 success_criteria:
   - [Mechanical or semantic check #1]
   - [Mechanical or semantic check #2]
