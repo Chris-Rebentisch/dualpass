@@ -84,8 +84,10 @@ def _restore(original) -> None:
 @pytest.fixture
 def project_with_dual_pass_spec(tmp_path: Path) -> Path:
     """Scaffold the example — its `spec` stage already has dual_pass_reviewer: true."""
+    from tests.conftest import enable_research_reviewer
     target = tmp_path / "proj"
     _init.run_init(target)
+    enable_research_reviewer(target)
     return target
 
 

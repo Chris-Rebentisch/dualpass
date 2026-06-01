@@ -19,6 +19,9 @@ from dualpass.config import AgentRole, AgentsConfig, StageConfig
 from dualpass.providers import LiveProvider, LiveProviderError
 from dualpass.providers.base import AuthorResult, StageContext
 from dualpass.providers.live import (
+    _resolve_artifact_path,
+    _unwrap_json_envelope,
+    _verdict_from_text,
     build_author_prompt,
     build_reviewer_prompt,
     parse_verdict,
@@ -379,3 +382,134 @@ def test_subprocess_timeout_surfaces_in_artifact(tmp_path: Path) -> None:
     result = provider.invoke_author(ctx)
     body = result.artifact_path.read_text()
     assert "dualpass-returncode: 124" in body
+
+
+# ── v1.0.2 — file-on-disk-first, JSON envelope unwrap, verdict-from-disk ─────
+
+
+def _outcome_stub(stdout: str = "", served_by: str = "author"):
+    """Minimal _Outcome for unit-testing the resolvers without a subprocess."""
+    from dualpass.providers.live import _Outcome
+    return _Outcome(stdout=stdout, stderr="", returncode=0, served_by=served_by, attempts=1)
+
+
+def test_unwrap_json_envelope_extracts_result_field() -> None:
+    """Claude --output-format json wraps the artifact in {"result": "..."}."""
+    envelope = (
+        '{"type":"result","subtype":"success","is_error":false,'
+        '"result":"---\\ntitle: hi\\n---\\n\\n# Body"}'
+    )
+    assert _unwrap_json_envelope(envelope) == "---\ntitle: hi\n---\n\n# Body"
+
+
+def test_unwrap_json_envelope_passes_through_plain_markdown() -> None:
+    plain = "---\ntitle: hi\n---\n\n# Body"
+    assert _unwrap_json_envelope(plain) == plain
+
+
+def test_unwrap_json_envelope_passes_through_malformed_json() -> None:
+    """If text starts with '{' but isn't valid JSON, return unchanged."""
+    malformed = "{ not valid json at all }"
+    assert _unwrap_json_envelope(malformed) == malformed
+
+
+def test_unwrap_json_envelope_passes_through_object_without_result_field() -> None:
+    """JSON object without a string `result` field is returned unchanged."""
+    no_result = '{"type":"info","duration_ms":123}'
+    assert _unwrap_json_envelope(no_result) == no_result
+
+
+def test_unwrap_json_envelope_handles_leading_whitespace() -> None:
+    envelope = '\n  {"result":"hello"}'
+    assert _unwrap_json_envelope(envelope) == "hello"
+
+
+def test_resolve_artifact_path_uses_file_on_disk_when_present(tmp_path: Path) -> None:
+    """v1.0.2: if the agent wrote a file via its own Write tool, that file
+    wins. We just prepend the diagnostic header."""
+    expected = tmp_path / "research-artifact-v1.md"
+    expected.write_text("---\ntitle: real\n---\n\n# Body the agent wrote", encoding="utf-8")
+    outcome = _outcome_stub(stdout="this was the stdout summary, not the artifact")
+    _resolve_artifact_path(expected, outcome)
+    body = expected.read_text()
+    assert body.startswith("<!-- dualpass-served-by:")
+    assert "# Body the agent wrote" in body
+    assert "this was the stdout summary" not in body
+
+
+def test_resolve_artifact_path_falls_back_to_stdout_when_no_file(tmp_path: Path) -> None:
+    """If no file on disk, write the stdout as the artifact (old behavior)."""
+    expected = tmp_path / "research-artifact-v1.md"
+    outcome = _outcome_stub(stdout="---\ntitle: hi\n---\n\n# Stdout-streamed body")
+    _resolve_artifact_path(expected, outcome)
+    body = expected.read_text()
+    assert "# Stdout-streamed body" in body
+
+
+def test_resolve_artifact_path_unwraps_json_envelope_already_on_disk(tmp_path: Path) -> None:
+    """If a previous run wrote a JSON envelope to disk (the v1.0.1 bug),
+    unwrap it on the next pass instead of doubling up."""
+    expected = tmp_path / "research-artifact-v1.md"
+    envelope = (
+        '<!-- dualpass-served-by: author -->\n'
+        '<!-- dualpass-attempts: 1 -->\n'
+        '<!-- dualpass-returncode: 0 -->\n'
+        '{"result":"---\\ntitle: rescued\\n---\\n\\n# Real body"}'
+    )
+    expected.write_text(envelope, encoding="utf-8")
+    outcome = _outcome_stub(stdout="ignored")
+    _resolve_artifact_path(expected, outcome)
+    body = expected.read_text()
+    assert "# Real body" in body
+    # Exactly one diagnostic header (not two stacked).
+    assert body.count("<!-- dualpass-served-by:") == 1
+
+
+def test_resolve_artifact_path_treats_empty_file_as_no_file(tmp_path: Path) -> None:
+    """A zero-byte file should not count as 'agent wrote something'."""
+    expected = tmp_path / "research-artifact-v1.md"
+    expected.write_text("", encoding="utf-8")
+    outcome = _outcome_stub(stdout="# Stdout content")
+    _resolve_artifact_path(expected, outcome)
+    body = expected.read_text()
+    assert "# Stdout content" in body
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("Verdict: Approved", "approved"),
+        ("Verdict: approved", "approved"),
+        ("# Review\n\nVerdict: Rejected\n", "rejected"),
+        ("Verdict: Blocked", "blocked"),
+        ("no verdict anywhere", None),
+    ],
+)
+def test_verdict_from_text_parses_review_body(text: str, expected) -> None:
+    assert _verdict_from_text(text) == expected
+
+
+def test_invoke_author_preserves_agent_written_file(tmp_path: Path) -> None:
+    """Integration: when the author CLI writes the artifact via its own tools
+    AND prints a status summary to stdout, the file-on-disk content wins."""
+    # Pre-populate the artifact as the agent would have via its Write tool.
+    ctx = _ctx(tmp_path)
+    artifact = ctx.units_dir / "research-artifact-v1.md"
+    artifact.write_text(
+        "---\ntitle: Real artifact from agent\n---\n\n# Body the agent wrote with its own Write tool\n",
+        encoding="utf-8",
+    )
+
+    cfg = AgentsConfig(
+        roles={
+            "author": AgentRole(name="author", command="echo Wrote artifact. Status complete.", timeout_seconds=15),
+            "reviewer": AgentRole(name="reviewer", command="true", timeout_seconds=15),
+        }
+    )
+    provider = LiveProvider(cfg)
+    result = provider.invoke_author(ctx)
+    body = result.artifact_path.read_text()
+    assert "Body the agent wrote with its own Write tool" in body
+    assert "Wrote artifact. Status complete." not in body
+    # Exactly one diagnostic header.
+    assert body.count("<!-- dualpass-served-by:") == 1

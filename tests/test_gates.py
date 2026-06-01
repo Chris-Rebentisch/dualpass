@@ -19,7 +19,6 @@ from dualpass.gates import (
 )
 from dualpass.memory import BuildMarker, lock_path
 
-
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
 

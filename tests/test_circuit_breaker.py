@@ -53,8 +53,10 @@ class FixedContentMock(Provider):
 
 @pytest.fixture
 def scaffolded_project(tmp_path: Path) -> Path:
+    from tests.conftest import enable_research_reviewer
     target = tmp_path / "proj"
     _init.run_init(target)
+    enable_research_reviewer(target)
     # Tighten breaker so tests run fast.
     dp_json = target / "config" / "dualpass.json"
     data = json.loads(dp_json.read_text())
@@ -179,8 +181,10 @@ def test_breaker_resets_on_progress(scaffolded_project: Path) -> None:
 
 
 def test_breaker_disabled_when_threshold_is_zero(tmp_path: Path) -> None:
+    from tests.conftest import enable_research_reviewer
     target = tmp_path / "proj"
     _init.run_init(target)
+    enable_research_reviewer(target)
     dp_json = target / "config" / "dualpass.json"
     data = json.loads(dp_json.read_text())
     data["circuit_breaker"]["max_no_progress_relaunches"] = 1  # min allowed by schema

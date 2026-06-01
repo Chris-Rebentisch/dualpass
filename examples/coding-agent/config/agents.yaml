@@ -11,7 +11,6 @@ roles:
       claude --dangerously-skip-permissions
       --model claude-opus-4-6
       -p {prompt}
-      --output-format json
     timeout_seconds: 5400
     transient_retries: 3
     transient_retry_delay_seconds: 10
@@ -24,7 +23,6 @@ roles:
     command: >-
       cursor-agent --yolo --trust --approve-mcps
       -p {prompt}
-      --output-format json
     timeout_seconds: 5400
     transient_retries: 3
     transient_retry_delay_seconds: 10
@@ -35,7 +33,6 @@ roles:
       claude --dangerously-skip-permissions
       --model claude-opus-4-6
       -p {prompt}
-      --output-format json
     timeout_seconds: 5400
     activate_after_consecutive_exhausted: 3
     exhaustion_patterns:
@@ -48,6 +45,5 @@ roles:
     command: >-
       cursor-agent --yolo --trust --approve-mcps
       -p {prompt}
-      --output-format json
     timeout_seconds: 5400
     transient_retries: 3

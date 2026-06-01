@@ -7,11 +7,34 @@ All notable changes to dualpass are documented here. Format follows [Keep a Chan
 Possible future work (open to feedback):
 
 - Hosted variant (out of scope for v1 by design — currently local-filesystem only)
-- PyPI publish workflow + signed releases
 - Per-reviewer focus prompts for dual-pass (currently both reviewers see the same prompt; the contrast comes from LLM nondeterminism and cross-vendor fallback)
 - Sub-agent orchestration (currently documented affordance only — CLI agents handle their own isolation)
 - Built-in cost ledger (parsing per-CLI cost output was too vendor-specific to ship in v1; ROADMAP candidate)
 - PWD halt-and-remediate and cumulative-count cascade as enforced built-in gates (currently inherited at the doctrine level only)
+- Disk-unblock polling for hung cursor-agent reviewer subprocesses (mirrors `run_subprocess_with_reviewer_disk_unblock` in the source pipeline). v1.0.2 reads the verdict from the on-disk review file, so a hung subprocess doesn't lose the verdict — but it does still tie up the slot until timeout. A polling-and-terminate pattern would shorten that window.
+
+## [1.0.2] — 2026-06-01
+
+The first live-provider dogfood test surfaced a fundamental design mismatch: the v1.0.0 LiveProvider assumed agents stream markdown to stdout, but real agent CLIs (claude, cursor-agent) write artifacts to disk via their own tools and emit status summaries to stdout. The provider was destructively overwriting agent-written files with the status-summary stdout. This release ports the proven file-on-disk-first patterns from a production source pipeline.
+
+### Added
+
+- **`_resolve_artifact_path`** in `src/dualpass/providers/live.py` — file-on-disk-first artifact resolution. If the agent's own tools (Write, Bash) created the expected artifact file, that file IS the artifact; the diagnostic header is prepended inline. If no file appeared, the provider falls back to writing stdout. Direct port of `infer_latest_stage_artifact` semantics from the source pipeline.
+- **`_unwrap_json_envelope`** in `src/dualpass/providers/live.py` — when stdout begins with `{` and parses as a JSON object with a string `result` field (e.g. `claude --output-format json` or `cursor-agent --output-format json`), the wrapped `.result` content is unwrapped before writing. Direct port of `parse_json_stdout` + `extract_cli_payload`.
+- **`_verdict_from_text`** in `src/dualpass/providers/live.py` — reviewer verdict resolution now reads the on-disk review file body first before falling back to stdout. cursor-agent reliably writes the review to disk but its stdout is unreliable; the file body is the authoritative source. Direct port of `review_body_signals_approved`.
+- 15 new tests under `tests/test_providers_live.py` covering the three helpers, the integration path, and backward compatibility with stdout-streaming skills.
+
+### Changed
+
+- **`examples/coding-agent/config/agents.yaml`** — dropped `--output-format json` from all four roles. The provider unwraps the envelope defensively if a user re-adds it, but the default no longer enshrines the v1.0.1 footgun.
+- **`examples/coding-agent/config/stages.yaml`** — `research.reviewer_skill: null` by default. Research is exploration, not judgment-against-spec; LLM review on research burns budget without catching the load-bearing failures (those surface in outline/spec). `skills/research/REVIEWER.md` ships as an opt-in template for projects that want to invest in research review. Lesson inherited from a production source pipeline that ran research-without-reviewer across 80+ build cycles.
+- **`src/dualpass/providers/live.py` module docstring** — no longer claims "no JSON-envelope assumptions" or "stdout-only." Now documents the two-source artifact resolution policy and cites the source pipeline functions each helper ports.
+
+### Fixed
+
+- v1.0.1 LiveProvider destructively overwrote files the agent wrote via its own Write tool with the agent's stdout status summary — the actual artifact content was lost. v1.0.2 preserves on-disk content.
+- v1.0.1 example `agents.yaml` shipped with `--output-format json` on commands that the LiveProvider's docstring explicitly disclaimed handling for. The example now matches the provider's actual contract.
+- v1.0.1 example `stages.yaml` shipped with a reviewer on the research stage, which a real run of a production scope brief revealed to be wasted budget (no judgment standard for exploration).
 
 ## [1.0.1] — 2026-06-01
 

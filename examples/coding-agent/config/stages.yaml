@@ -6,9 +6,17 @@
 # Edit freely. Drop stages you don't need; add stages your project requires.
 
 stages:
+  # research has no reviewer by design (v1.0.2): research is exploration,
+  # not judgment-against-spec. There's no standard a reviewer can apply
+  # without doing the same research themselves. Real failures surface in
+  # outline/spec where claims get turned into commitments. The preflight
+  # gates still catch mechanical issues (missing frontmatter, broken
+  # citations). To opt in to LLM review of research, set
+  # `reviewer_skill: skills/research/REVIEWER.md` — the file ships as an
+  # opt-in template.
   - name: research
     author_skill: skills/research/SKILL.md
-    reviewer_skill: skills/research/REVIEWER.md
+    reviewer_skill: null
     preflight_gates:
       - check-frontmatter
     max_rounds: 6

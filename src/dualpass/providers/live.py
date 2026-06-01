@@ -23,18 +23,37 @@ Prompt building:
   - Stage skill file (e.g. `skills/spec/SKILL.md`) is read and wrapped in
     a `<skill>` block. If the file is missing we proceed with an empty
     skill — the LLM will produce something, just probably worse.
-  - Author prompt asks for a markdown document written directly to stdout.
-  - Reviewer prompt embeds the artifact and asks for a final `Verdict: ...`
-    line. We parse the first valid verdict line in the response.
+  - Author and reviewer artifacts are resolved with a **two-source policy**
+    (v1.0.2, ported from GrACE's `scripts/pipeline/run_pipeline.py`):
+
+      1. *File-on-disk wins.* If the agent's own tools (Write, Bash) created
+         the expected artifact file at the path the skill instructed, that
+         file is the artifact — we just prepend a diagnostic header inline.
+         Mirrors `infer_latest_stage_artifact` in run_pipeline.py:773.
+      2. *Stdout is the fallback.* If no file appeared on disk, the agent
+         streamed markdown to stdout; we write it. This is the original
+         v1.0.0 behavior, preserved for skills that explicitly forbid file
+         tools.
+      3. *JSON envelope defense.* If the captured stdout begins with `{` and
+         parses as a JSON envelope with a string `result` field
+         (e.g. `claude --output-format json` or `cursor-agent --output-format
+         json`), the wrapped `.result` content is unwrapped before writing.
+         Mirrors `parse_json_stdout` + `extract_cli_payload` in
+         run_pipeline.py:684-743.
+  - Reviewer verdict resolution is similarly two-source: prefer a `Verdict:`
+    line found in the on-disk review file body (where cursor-agent reliably
+    writes); fall back to parsing stdout. Mirrors `review_body_signals_approved`
+    in run_pipeline.py:803.
 
 This module is deliberately framework-free: stdlib only. No vendor SDKs,
-no httpx, no JSON-envelope assumptions. It speaks "argv + stdin → stdout"
-because that's what every shipping agent CLI does.
+no httpx.
 """
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 import shlex
 import subprocess
 import time
@@ -206,7 +225,11 @@ class LiveProvider(Provider):
         prompt = build_author_prompt(ctx)
         outcome = self._run_with_transient_retry(role, prompt, role_label="author")
         artifact = ctx.units_dir / f"{ctx.stage.name}-artifact-v{ctx.round_number}.md"
-        artifact.write_text(_with_diagnostic_header(outcome), encoding="utf-8")
+        # v1.0.2: file-on-disk-first (port of GrACE's infer_latest_stage_artifact
+        # semantics — run_pipeline.py:773). If claude/cursor used their own Write
+        # tools to populate the artifact, that file IS the artifact; we just
+        # prepend a diagnostic header. Otherwise we fall back to writing stdout.
+        _resolve_artifact_path(artifact, outcome)
         return AuthorResult(
             artifact_path=artifact,
             served_by=outcome.served_by,
@@ -234,10 +257,21 @@ class LiveProvider(Provider):
             else:
                 self._reviewer_exhaustion_streak = 0
 
-        verdict = parse_verdict(outcome.stdout)
         suffix = f"-{ctx.pass_label}" if ctx.pass_label else ""
         review = ctx.units_dir / f"{ctx.stage.name}-review-v{ctx.round_number}{suffix}.md"
-        review.write_text(_with_diagnostic_header(outcome), encoding="utf-8")
+        # v1.0.2: file-on-disk-first for review artifact (mirrors author path).
+        _resolve_artifact_path(review, outcome)
+        # v1.0.2: verdict-from-disk-first (port of run_pipeline.py:803's
+        # review_body_signals_approved). cursor-agent reliably writes its review
+        # to the expected file but its stdout is unreliable; the review file body
+        # is the authoritative source for the verdict.
+        try:
+            review_body = review.read_text(encoding="utf-8")
+        except OSError:
+            review_body = ""
+        verdict = _verdict_from_text(review_body)
+        if verdict is None:
+            verdict = parse_verdict(outcome.stdout)
         return ReviewResult(
             verdict=verdict,
             review_artifact=review,
@@ -313,11 +347,122 @@ class LiveProvider(Provider):
 # ── Artifact framing ─────────────────────────────────────────────────────────
 
 
-def _with_diagnostic_header(outcome: _Outcome) -> str:
-    """Prepend a small diagnostic header so the artifact file is auditable."""
+_DIAGNOSTIC_HEADER_RE = re.compile(
+    r"^<!-- dualpass-served-by:.*?-->\n"
+    r"<!-- dualpass-attempts:.*?-->\n"
+    r"<!-- dualpass-returncode:.*?-->\n",
+    re.DOTALL,
+)
+
+
+def _diagnostic_header(outcome: _Outcome) -> str:
     return (
         f"<!-- dualpass-served-by: {outcome.served_by} -->\n"
         f"<!-- dualpass-attempts: {outcome.attempts} -->\n"
         f"<!-- dualpass-returncode: {outcome.returncode} -->\n"
-        f"{outcome.stdout}"
     )
+
+
+def _with_diagnostic_header(outcome: _Outcome) -> str:
+    """Prepend a small diagnostic header so the artifact file is auditable.
+
+    Unwraps a Claude/Cursor `--output-format json` envelope when present:
+    if stdout parses as a JSON object with a string `result` field, the
+    `.result` content is written instead of the raw envelope. Direct port
+    of `parse_json_stdout` + `extract_cli_payload` in run_pipeline.py:684-743.
+    """
+    body = _unwrap_json_envelope(outcome.stdout)
+    return _diagnostic_header(outcome) + body
+
+
+def _unwrap_json_envelope(text: str) -> str:
+    """If `text` is a Claude/Cursor JSON envelope, return its `.result` field.
+
+    Behavior (mirrors run_pipeline.py:684-743):
+      - `{"result": "...markdown..."}` → returns the markdown
+      - `{"type": "result", "result": "..."}` → same
+      - Anything that fails to parse as JSON → returned unchanged
+      - JSON object without a string `result` field → returned unchanged
+
+    The unwrap is best-effort and defensive: when in doubt, return the
+    original string so we never destroy useful content.
+    """
+    stripped = text.lstrip()
+    if not stripped.startswith("{"):
+        return text
+    try:
+        parsed = json.loads(stripped)
+    except json.JSONDecodeError:
+        return text
+    if not isinstance(parsed, dict):
+        return text
+    result = parsed.get("result")
+    if isinstance(result, str):
+        return result
+    return text
+
+
+def _resolve_artifact_path(
+    expected: Path, outcome: _Outcome
+) -> None:
+    """File-on-disk-first artifact resolution (v1.0.2).
+
+    If the agent's own tools created the expected artifact file on disk,
+    preserve it: prepend the diagnostic header to its existing content.
+    Otherwise, write the agent's stdout (with diagnostic header + envelope
+    unwrap) as the artifact body. Direct port of GrACE's
+    `infer_latest_stage_artifact` semantics from run_pipeline.py:773-800:
+    the orchestrator does not dictate where artifacts come from; it accepts
+    whichever source actually produced one.
+
+    Idempotency: if the on-disk file already starts with a dualpass
+    diagnostic header (e.g. from a prior run that crashed mid-write), the
+    existing header is stripped before the new one is prepended.
+    """
+    on_disk = ""
+    if expected.exists():
+        try:
+            on_disk = expected.read_text(encoding="utf-8")
+        except OSError:
+            on_disk = ""
+
+    on_disk_meaningful = bool(on_disk.strip())
+    if on_disk_meaningful:
+        stripped_existing = _DIAGNOSTIC_HEADER_RE.sub("", on_disk, count=1)
+        # Also unwrap if the file content is itself a JSON envelope —
+        # happens when a prior run wrote stdout-as-artifact verbatim.
+        unwrapped = _unwrap_json_envelope(stripped_existing)
+        expected.write_text(
+            _diagnostic_header(outcome) + unwrapped, encoding="utf-8"
+        )
+        return
+
+    # No file on disk (or empty): use the stdout-as-artifact path.
+    expected.write_text(_with_diagnostic_header(outcome), encoding="utf-8")
+
+
+_VERDICT_APPROVED_RE = re.compile(
+    r"^\s*Verdict:\s*Approved\s*$", re.IGNORECASE | re.MULTILINE
+)
+_VERDICT_REJECTED_RE = re.compile(
+    r"^\s*Verdict:\s*Rejected\s*$", re.IGNORECASE | re.MULTILINE
+)
+_VERDICT_BLOCKED_RE = re.compile(
+    r"^\s*Verdict:\s*Blocked\s*$", re.IGNORECASE | re.MULTILINE
+)
+
+
+def _verdict_from_text(text: str) -> ReviewVerdict | None:
+    """Scan text for the first `Verdict: approved|rejected|blocked` line.
+
+    Mirrors run_pipeline.py:803's `review_body_signals_approved` but
+    generalized to all three verdict values. Returns None when no
+    verdict line is found.
+    """
+    if _VERDICT_APPROVED_RE.search(text):
+        return "approved"
+    if _VERDICT_REJECTED_RE.search(text):
+        return "rejected"
+    if _VERDICT_BLOCKED_RE.search(text):
+        return "blocked"
+    return None

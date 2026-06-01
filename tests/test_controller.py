@@ -18,8 +18,10 @@ from dualpass.observability import event_log_path, read_events
 @pytest.fixture
 def scaffolded_project(tmp_path: Path) -> Path:
     """Scaffold a fresh dualpass project into tmp_path/proj."""
+    from tests.conftest import enable_research_reviewer
     target = tmp_path / "proj"
     _init.run_init(target)
+    enable_research_reviewer(target)
     return target
 
 
