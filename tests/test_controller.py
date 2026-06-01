@@ -53,9 +53,14 @@ def test_run_unit_completes_full_chain_with_mock_provider(scaffolded_project: Pa
     # Code stage has no reviewer (its review surface is the audit stage), so
     # no code-review-v1.md should be produced.
     assert not (udir / "code-review-v1.md").is_file()
-    # Every other stage should have a review file.
-    for stage in ("research", "outline", "spec", "prompt", "audit", "handoff"):
+    # Single-pass stages produce one review file with no suffix.
+    for stage in ("research", "outline", "audit", "handoff"):
         assert (udir / f"{stage}-review-v1.md").is_file(), f"missing review {stage}"
+    # spec + prompt are dual-pass in the bundled example — two parallel reviewer artifacts each.
+    for stage in ("spec", "prompt"):
+        assert (udir / f"{stage}-review-v1-a.md").is_file(), f"missing {stage} review a"
+        assert (udir / f"{stage}-review-v1-b.md").is_file(), f"missing {stage} review b"
+        assert not (udir / f"{stage}-review-v1.md").is_file()
 
 
 def test_run_unit_emits_structured_events(scaffolded_project: Path) -> None:

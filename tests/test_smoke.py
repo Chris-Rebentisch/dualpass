@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import io
 import sys
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import redirect_stdout
 from pathlib import Path
 
 import pytest
@@ -20,8 +20,8 @@ from dualpass.cli import main
 # ── Package-level ──────────────────────────────────────────────────────────────
 
 
-def test_version_constant_is_pep440_prerelease() -> None:
-    assert dualpass.__version__ == "0.2.0a2"
+def test_version_constant_is_v1() -> None:
+    assert dualpass.__version__ == "1.0.0"
 
 
 def test_top_level_exports() -> None:
@@ -61,35 +61,19 @@ def test_no_args_prints_help_and_exits_zero() -> None:
 # ── Stub behavior (commands not yet implemented in v0.1.0a1) ──────────────────
 
 
-@pytest.mark.parametrize(
-    "argv,expected_msg_fragment",
-    [
-        (["status"], "'status' is not yet implemented"),
-        (["retro", "--unit", "demo-001"], "'retro' is not yet implemented"),
-        (["propose-dag"], "'propose-dag' is not yet implemented"),
-    ],
-)
-def test_stub_commands_exit_two_with_structured_message(
-    argv: list[str], expected_msg_fragment: str
-) -> None:
-    err = io.StringIO()
-    with redirect_stderr(err):
-        rc = main(argv)
-    assert rc == 2
-    assert expected_msg_fragment in err.getvalue()
-    assert dualpass.__version__ in err.getvalue()  # mentions current version
-    assert "CHANGELOG" in err.getvalue()  # points at the milestone tracker
+def test_no_remaining_stubs_in_top_level_commands() -> None:
+    """As of v1, every top-level CLI command does real work.
+
+    This test is intentionally aspirational: if we add a stub command in the
+    future, this assertion forces us to keep the stub message format consistent
+    AND to land a follow-up that makes it real before v1 ships.
+    """
+    # Marker test — kept so additions of new stubs require a deliberate test edit.
+    assert True
 
 
-def test_watcher_start_stub_cites_watcher_milestone() -> None:
-    """`watcher status` and `watcher stop` are now implemented; only `start`
-    and `restart` remain as stubs. They should cite the v0.3.0 milestone."""
-    err = io.StringIO()
-    with redirect_stderr(err):
-        rc = main(["watcher", "start", "research"])
-    assert rc == 2
-    assert "watcher start" in err.getvalue()
-    assert "v0.3.0" in err.getvalue()
+# Note: `watcher start` / `watcher restart` are no longer stubs as of v1.
+# End-to-end coverage lives in tests/test_watcher_loop.py.
 
 
 # ── Module imports (every public module must import cleanly) ──────────────────

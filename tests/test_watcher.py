@@ -7,8 +7,6 @@ import os
 from contextlib import redirect_stdout
 from pathlib import Path
 
-import pytest
-
 from dualpass import watcher
 from dualpass.cli import main
 
@@ -84,10 +82,8 @@ def test_stop_sends_sigterm_to_running_pid(tmp_path: Path) -> None:
             proc.wait()
 
 
-def test_start_still_raises_notimplemented(tmp_path: Path) -> None:
-    """The actual fs-watching loop is deferred."""
-    with pytest.raises(NotImplementedError, match="loop is not yet implemented"):
-        watcher.start("research", project_root=tmp_path)
+# Note: as of v1, watcher.start() is fully implemented. See test_watcher_loop.py
+# for tests that exercise the daemon lifecycle end-to-end.
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
@@ -122,18 +118,8 @@ def test_cli_watcher_stop_with_no_running_watchers_exits_one(tmp_path: Path) -> 
     assert "was not running" in out.getvalue()
 
 
-def test_cli_watcher_start_still_emits_stub_message(tmp_path: Path) -> None:
-    """start is the only stub left — should hit the structured stub path."""
-    from io import StringIO
-
-    err = StringIO()
-    from contextlib import redirect_stderr
-
-    with redirect_stderr(err):
-        rc = main(["watcher", "start", "research", "--project", str(tmp_path)])
-    assert rc == 2
-    assert "'watcher start'" in err.getvalue()
-    assert "v0.3.0" in err.getvalue()
+# Note: `watcher start` is no longer a stub. End-to-end coverage lives in
+# tests/test_watcher_loop.py::test_start_foreground_writes_pidfile_and_responds_to_stop.
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────

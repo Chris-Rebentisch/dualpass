@@ -4,11 +4,31 @@ All notable changes to dualpass are documented here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
-### Planned for 0.1.0 (v1)
+Possible future work (open to feedback):
 
-- Three background watchers with real fs-watching loop
-- Circuit breaker (no-progress detection across consecutive failed rounds)
-- `dualpass status`, `retro`, `propose-dag` commands
+- Hosted variant (out of scope for v1 by design — currently local-filesystem only)
+- PyPI publish workflow + signed releases
+- Per-reviewer focus prompts for dual-pass (currently both reviewers see the same prompt; the contrast comes from LLM nondeterminism and cross-vendor fallback)
+
+## [1.0.0] — 2026-06-01
+
+The feature-complete release. Everything originally scoped for v1 is in.
+
+### Added (since v0.2.0a2)
+
+- **`dualpass status`** — reads `.dualpass-state/<unit>-events.jsonl` + lockfiles, renders a rich-formatted table (or `--json`) showing per-unit state: `in-flight`, `completed`, `paused-at-breakpoint`, `blocked`, `circuit-tripped`, `stale-lock`, or `unknown`. Stale-lock detection uses `os.kill(pid, 0)` liveness.
+- **Circuit breaker** — tracks SHA-256 of each round's artifact. When the author keeps producing identical content AND the reviewer keeps rejecting for `circuit_breaker.max_no_progress_relaunches` consecutive rounds, halts with `circuit_breaker_tripped` and drops a human-readable diagnostic at `.dualpass-state/<unit>-circuit-tripped.md`. Streak resets on the first new artifact.
+- **Dual-pass parallel reviewer** — when `stage.dual_pass_reviewer: true`, the controller spawns two reviewer invocations in parallel via `ThreadPoolExecutor`. Both must return `approved` for the stage round to pass. Distinct `pass_label` values (`a`/`b`) disambiguate the per-reviewer artifact filenames so concurrent writes don't collide. Cross-vendor fallback applies independently to each pass.
+- **`dualpass retro`** — single-unit mode (`--unit`) opens or seeds `docs/_project/RETROSPECTIVES/<unit>.md` (template pre-populated with the unit's run summary). Range mode (`--range '001..010' --output ...`) aggregates per-unit retros into a rollup with frontmatter, TOC, and concatenated bodies. Range parser handles zero-padded numeric ranges with or without prefixes.
+- **`dualpass propose-dag`** — interactive walkthrough (4 questions) that writes `docs/_project/DAG-PROPOSAL.md` — a markdown sketch with shell-script implementation pattern. v1 explicitly stops at scoping; DAG execution is intentionally out of scope. `--non-interactive` mode for scripts.
+- **Three background watchers (`research` / `prompt` / `handoff`)** — `dualpass watcher start <name>` daemonizes via double-fork + setsid, writes a PID file, and polls `.dualpass-state/` every N seconds (configurable). Each watcher auto-resumes units paused at THAT stage's breakpoint when a `<unit>-approved-<stage>.md` marker appears AND no pipeline lockfile is held. Triggered runs spawn `dualpass run --from-stage <stage> --ignore-breakpoints` via `subprocess.Popen(start_new_session=True)`. **State seeding** on first start writes `<unit>-handled-<stage>.md` for every pre-existing approval marker so the watcher doesn't stampede the historical backlog. **Idempotency**: handled-markers prevent double-trigger across poll cycles. **`--foreground`** flag keeps the watcher attached for debugging.
+- 32 new tests since v0.2.0a2 (status + breaker + dual-pass + retro + propose-dag + watcher-loop). Total **149 passing** across Python 3.12/3.13 on Ubuntu and macOS.
+
+### Changed (since v0.2.0a2)
+
+- Every previously-stub CLI command is now functional. No remaining `not yet implemented` messages.
+- `StageContext` gains an optional `pass_label: str | None` field used by the dual-pass parallel reviewer to disambiguate concurrent artifact writes.
+- `Development Status` classifier bumped from `Pre-Alpha` to `Production/Stable` in `pyproject.toml`.
 
 ## [0.2.0a2] — 2026-06-01
 

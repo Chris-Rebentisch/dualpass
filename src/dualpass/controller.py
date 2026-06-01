@@ -28,8 +28,10 @@ Not yet wired (will land in follow-up milestones):
 
 from __future__ import annotations
 
+import hashlib
 import sys
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
@@ -213,6 +215,71 @@ def run_unit(
 # ── Internals ───────────────────────────────────────────────────────────────
 
 
+def _invoke_dual_reviewers(
+    provider_impl: Provider, ctx: StageContext, author: AuthorResult
+) -> list[ReviewResult]:
+    """Spawn two reviewer invocations in parallel; return both results in order.
+
+    Both reviewers see the same prompt (same skill, same artifact). The
+    independence comes from LLM nondeterminism and — for the live provider —
+    the cross-vendor fallback mechanic. Both reviewers must return `approved`
+    for the stage round to pass. Distinct `pass_label` values disambiguate
+    the per-reviewer artifact filenames so the two concurrent writes don't
+    collide on disk.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    from dataclasses import replace
+
+    ctx_a = replace(ctx, pass_label="a")
+    ctx_b = replace(ctx, pass_label="b")
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        future_a = ex.submit(provider_impl.invoke_reviewer, ctx_a, author)
+        future_b = ex.submit(provider_impl.invoke_reviewer, ctx_b, author)
+        return [future_a.result(), future_b.result()]
+
+
+def _hash_file(path: Path) -> str:
+    """SHA-256 of a file's bytes. Used by the circuit breaker."""
+    h = hashlib.sha256()
+    h.update(path.read_bytes())
+    return h.hexdigest()
+
+
+def _write_circuit_breaker_marker(
+    project_root: Path,
+    unit_id: str,
+    stage_name: str,
+    rounds_used: int,
+    threshold: int,
+    artifact_hash: str,
+) -> None:
+    """Drop a human-readable diagnostic next to the state dir on trip."""
+    from dualpass.memory import state_dir
+
+    marker = state_dir(project_root) / f"{unit_id}-circuit-tripped.md"
+    marker.write_text(
+        f"# Circuit breaker tripped\n\n"
+        f"- **unit:** `{unit_id}`\n"
+        f"- **stage:** `{stage_name}`\n"
+        f"- **rounds used:** {rounds_used}\n"
+        f"- **threshold:** {threshold} consecutive no-progress rounds\n"
+        f"- **artifact hash (sha256):** `{artifact_hash}`\n"
+        f"- **tripped at:** {datetime.now(UTC).isoformat()}\n\n"
+        f"## What this means\n\n"
+        f"The author kept producing the same artifact (identical SHA-256) while "
+        f"the reviewer kept rejecting it. Continuing to retry would burn tokens "
+        f"and time without forward progress. The controller halted the run.\n\n"
+        f"## What to do\n\n"
+        f"1. Inspect the artifact at `.dualpass-state/{unit_id}/{stage_name}-artifact-v{rounds_used}.md`\n"
+        f"2. Inspect the review at `.dualpass-state/{unit_id}/{stage_name}-review-v{rounds_used}.md`\n"
+        f"3. Decide whether the reviewer is being unreasonable, the author lacks "
+        f"context, or the stage skill itself needs editing\n"
+        f"4. Address the root cause, then re-run with: "
+        f"`dualpass run --unit {unit_id} --from-stage {stage_name}`\n",
+        encoding="utf-8",
+    )
+
+
 def _resolve_start_index(stages: tuple, from_stage: str | None) -> int | None:
     """Return the index to start at, or None if --from-stage is unknown."""
     if from_stage is None:
@@ -240,12 +307,19 @@ def _max_rounds_for(stage, project_cfg) -> int:
 
 
 def _run_stage(stage, provider_impl: Provider, run: UnitRun, cfg) -> StageResult:
-    """Execute one stage to completion (or to max_rounds-exhausted)."""
+    """Execute one stage to completion (max_rounds-exhausted, or circuit-tripped)."""
     max_rounds = _max_rounds_for(stage, cfg.project)
     udir = units_dir(run.project_root, run.unit_id)
     rounds_used = 0
     last_artifact: AuthorResult | None = None
     last_verdict: ReviewVerdict | None = None
+
+    # Circuit breaker state — track per-stage. Reads project-level config; if
+    # the operator hasn't enabled the breaker (max_no_progress_relaunches=0 or
+    # missing) we skip the check entirely.
+    breaker_threshold = int(cfg.project.circuit_breaker.get("max_no_progress_relaunches", 0) or 0)
+    no_progress_streak = 0
+    last_artifact_hash: str | None = None
 
     for round_number in range(1, max_rounds + 1):
         rounds_used = round_number
@@ -268,6 +342,19 @@ def _run_stage(stage, provider_impl: Provider, run: UnitRun, cfg) -> StageResult
         )
         author = provider_impl.invoke_author(ctx)
         last_artifact = author
+
+        # Hash the artifact body to drive circuit-breaker progress detection.
+        # We rehash every round; if identical content shows up `breaker_threshold`
+        # times in a row AND the reviewer keeps rejecting, we halt and write a
+        # diagnostic marker. A successful approval below also returns out before
+        # ever incrementing the streak, so a one-shot stage trivially escapes.
+        if breaker_threshold > 0:
+            current_hash = _hash_file(author.artifact_path)
+            if last_artifact_hash is not None and current_hash == last_artifact_hash:
+                no_progress_streak += 1
+            else:
+                no_progress_streak = 0
+            last_artifact_hash = current_hash
 
         # Some stages (e.g. `code`) intentionally have no reviewer; the next
         # stage (e.g. `audit`) is the review surface.
@@ -293,10 +380,28 @@ def _run_stage(stage, provider_impl: Provider, run: UnitRun, cfg) -> StageResult
                 rounds_used=rounds_used,
             )
 
-        review: ReviewResult = provider_impl.invoke_reviewer(ctx, author)
-        last_verdict = review.verdict
+        # Reviewer pass — single-vendor or dual-vendor parallel depending on
+        # the stage's `dual_pass_reviewer` flag. Dual-pass requires BOTH
+        # reviewers to approve; if either rejects, the stage round counts as
+        # rejected and we retry up to max_rounds.
+        if stage.dual_pass_reviewer:
+            reviews = _invoke_dual_reviewers(provider_impl, ctx, author)
+            review_artifacts = [r.review_artifact for r in reviews]
+            verdicts = [r.verdict for r in reviews]
+            served_by = ", ".join(r.served_by for r in reviews)
+            combined_verdict: ReviewVerdict = (
+                "approved" if all(v == "approved" for v in verdicts) else "rejected"
+            )
+            review = reviews[0]  # representative for downstream payload references
+            review_repr = "; ".join(str(a) for a in review_artifacts)
+        else:
+            review = provider_impl.invoke_reviewer(ctx, author)
+            served_by = review.served_by
+            combined_verdict = review.verdict
+            review_repr = str(review.review_artifact)
+        last_verdict = combined_verdict
 
-        if review.verdict == "approved":
+        if combined_verdict == "approved":
             emit(
                 Event(
                     "stage_completed",
@@ -306,8 +411,9 @@ def _run_stage(stage, provider_impl: Provider, run: UnitRun, cfg) -> StageResult
                         "round": round_number,
                         "verdict": "approved",
                         "artifact": str(author.artifact_path),
-                        "review": str(review.review_artifact),
-                        "served_by": review.served_by,
+                        "review": review_repr,
+                        "served_by": served_by,
+                        "dual_pass": stage.dual_pass_reviewer,
                     },
                 ),
                 project_root=run.project_root,
@@ -328,12 +434,54 @@ def _run_stage(stage, provider_impl: Provider, run: UnitRun, cfg) -> StageResult
                 stage=stage.name,
                 payload={
                     "round": round_number,
-                    "verdict": review.verdict,
-                    "review": str(review.review_artifact),
+                    "verdict": combined_verdict,
+                    "review": review_repr,
+                    "no_progress_streak": no_progress_streak,
+                    "dual_pass": stage.dual_pass_reviewer,
                 },
             ),
             project_root=run.project_root,
         )
+
+        # Circuit breaker: bail out if the author keeps producing the same
+        # artifact AND the reviewer keeps rejecting. Threshold is "consecutive
+        # no-progress rounds" — a single no-progress round (streak == 1) is
+        # normal, only N+1 in a row trips it.
+        if breaker_threshold > 0 and no_progress_streak >= breaker_threshold:
+            _write_circuit_breaker_marker(
+                run.project_root,
+                run.unit_id,
+                stage.name,
+                rounds_used,
+                breaker_threshold,
+                last_artifact_hash or "",
+            )
+            emit(
+                Event(
+                    "circuit_breaker_tripped",
+                    unit=run.unit_id,
+                    stage=stage.name,
+                    payload={
+                        "rounds_used": rounds_used,
+                        "threshold": breaker_threshold,
+                        "artifact_hash": last_artifact_hash,
+                    },
+                ),
+                project_root=run.project_root,
+            )
+            return StageResult(
+                stage=stage.name,
+                status="blocked",
+                exit_signal="stop",
+                artifact_path=author.artifact_path,
+                rounds_used=rounds_used,
+                blocker_kind="circuit_breaker_tripped",
+                blocker_detail=(
+                    f"author produced identical artifact for {no_progress_streak + 1} "
+                    f"consecutive rounds while reviewer kept rejecting "
+                    f"(threshold={breaker_threshold})"
+                ),
+            )
 
     # Fell through max_rounds without approval.
     emit(

@@ -8,7 +8,7 @@
 
 A reliability-first agent harness for staged agentic pipelines, with cross-vendor independent review built in as a primitive. Author with Claude. Audit with Cursor. Or swap either for whatever you trust — `dualpass` is CLI-agnostic about both.
 
-> **Status:** v0 scaffolding. Not yet usable. Watch [CHANGELOG.md](CHANGELOG.md) for release progress.
+> **Status:** v1.0.0 — feature-complete. CLI surface, controller, dual-pass parallel reviewer, cross-vendor fallback, circuit breaker, watchers, retro tooling. 149 tests passing across Python 3.12/3.13 on Ubuntu and macOS.
 
 ---
 

@@ -235,7 +235,8 @@ class LiveProvider(Provider):
                 self._reviewer_exhaustion_streak = 0
 
         verdict = parse_verdict(outcome.stdout)
-        review = ctx.units_dir / f"{ctx.stage.name}-review-v{ctx.round_number}.md"
+        suffix = f"-{ctx.pass_label}" if ctx.pass_label else ""
+        review = ctx.units_dir / f"{ctx.stage.name}-review-v{ctx.round_number}{suffix}.md"
         review.write_text(_with_diagnostic_header(outcome), encoding="utf-8")
         return ReviewResult(
             verdict=verdict,

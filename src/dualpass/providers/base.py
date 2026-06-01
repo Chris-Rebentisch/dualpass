@@ -21,6 +21,11 @@ class StageContext:
     round_number: int  # 1-indexed
     units_dir: Path  # .dualpass-state/<unit>/
     project_root: Path  # where config/ lives
+    # Used by the dual-pass parallel reviewer to disambiguate two concurrent
+    # reviewer invocations writing artifacts to the same units_dir. When set,
+    # providers must append "-{pass_label}" to the review filename so the two
+    # parallel writes don't clobber each other.
+    pass_label: str | None = None
 
 
 @dataclass(frozen=True)

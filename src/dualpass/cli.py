@@ -1,21 +1,14 @@
 """dualpass command-line interface.
 
-Top-level commands:
+Top-level commands (all functional as of v1.0.0):
   init         — scaffold a new dualpass project from an example
   doctor       — probe the environment (CLIs, Python, state directory, configs)
   run          — execute a unit through the configured stage chain
   status       — show pipeline state for one unit or all in-flight units
   retro        — open/aggregate retrospectives
-  propose-dag  — interactive scoping if your task wants a DAG (v1 stops here; impl is yours)
+  propose-dag  — interactive scoping if your task wants a DAG (v1 stops at scoping)
   watcher      — start/stop/status the background daemons
   config       — validate config files
-
-v0.1.0a1 status:
-  Functional: `--version`, `--help`, `doctor`, `config validate`.
-  Stub:       `init`, `run`, `status`, `retro`, `propose-dag`, `watcher`.
-
-Stub commands emit a structured 'not yet implemented' message with a milestone
-pointer and exit 2.
 """
 
 from __future__ import annotations
@@ -126,6 +119,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_status.add_argument("--unit", help="Show only this unit")
     p_status.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
+    p_status.add_argument(
+        "--project",
+        default=".",
+        help="Project root containing .dualpass-state/ (default: current directory)",
+    )
 
     # retro
     p_retro = sub.add_parser(
@@ -142,9 +140,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "--output",
         help="Output path for the aggregated retro (default: docs/_project/RETROSPECTIVES/<range>.md)",
     )
+    p_retro.add_argument(
+        "--project",
+        default=".",
+        help="Project root containing docs/_project/RETROSPECTIVES (default: current directory)",
+    )
 
     # propose-dag
-    sub.add_parser(
+    p_propose = sub.add_parser(
         "propose-dag",
         help="Interactive prompt to scope a DAG if your task needs one (v1 stops at scoping)",
         description=(
@@ -153,6 +156,34 @@ def _build_parser() -> argparse.ArgumentParser:
             "it outside dualpass. The intent is to surface the design-pressure signal "
             "cleanly rather than silently constrain you."
         ),
+    )
+    p_propose.add_argument(
+        "--project",
+        default=".",
+        help="Project root where docs/_project/DAG-PROPOSAL.md will be written (default: current directory)",
+    )
+    p_propose.add_argument(
+        "--non-interactive",
+        dest="non_interactive",
+        action="store_true",
+        help="Skip the interactive prompt and use the values from --name/--parallel/--fan-out/--join",
+    )
+    p_propose.add_argument("--name", default="dag-proposal", help="Slug for the proposal")
+    p_propose.add_argument(
+        "--parallel",
+        default="(describe)",
+        help="Which stages could run in parallel",
+    )
+    p_propose.add_argument(
+        "--fan-out",
+        dest="fan_out",
+        default="(describe)",
+        help="Which stage fans out into multiple units",
+    )
+    p_propose.add_argument(
+        "--join",
+        default="(describe)",
+        help="Where do the parallel paths converge",
     )
 
     # watcher
@@ -182,6 +213,18 @@ def _build_parser() -> argparse.ArgumentParser:
         "--project",
         default=".",
         help="Project root containing .dualpass-state/ (default: current directory)",
+    )
+    p_watcher.add_argument(
+        "--foreground",
+        action="store_true",
+        help="(start only) Keep the watcher attached to the terminal — useful for debugging",
+    )
+    p_watcher.add_argument(
+        "--poll-interval",
+        dest="poll_interval",
+        type=int,
+        default=None,
+        help="(start only) Override the polling interval in seconds (default: 5)",
     )
 
     # config
@@ -300,8 +343,90 @@ def _cmd_init(
     return 0
 
 
-def _cmd_watcher(*, action: str, name: str, project_root: Path) -> int:
-    """Lifecycle management for background watchers (status/stop work; start stubbed)."""
+def _cmd_propose_dag(
+    *,
+    project_root: Path,
+    non_interactive: bool,
+    name: str,
+    parallel: str,
+    fan_out: str,
+    join: str,
+) -> int:
+    """Either prompt interactively or take values from flags, then write the sketch."""
+    from dualpass import _propose_dag
+
+    if non_interactive:
+        answers = _propose_dag.DagAnswers(
+            name=name, parallel_stages=parallel, fan_out_stage=fan_out, join_point=join
+        )
+        path = _propose_dag.write_proposal(project_root, answers)
+    else:
+        path = _propose_dag.run_interactive(project_root)
+    print(f"DAG proposal written: {path}")
+    return 0
+
+
+def _cmd_retro(
+    *,
+    unit_id: str | None,
+    range_spec: str | None,
+    output: Path | None,
+    project_root: Path,
+) -> int:
+    """Open a single-unit retro or aggregate a range into a rollup."""
+    from dualpass import _retro
+
+    if not unit_id and not range_spec:
+        print(
+            "dualpass retro: pass either --unit <id> or --range <start..end>",
+            file=sys.stderr,
+        )
+        return 2
+    if unit_id and range_spec:
+        print(
+            "dualpass retro: --unit and --range are mutually exclusive",
+            file=sys.stderr,
+        )
+        return 2
+
+    if unit_id:
+        path, created = _retro.open_or_create(project_root, unit_id)
+        marker = "created" if created else "exists"
+        print(f"retro for {unit_id!r} ({marker}): {path}")
+        return 0
+
+    try:
+        unit_ids = _retro.parse_range(range_spec)  # type: ignore[arg-type]
+    except ValueError as exc:
+        print(f"dualpass retro: {exc}", file=sys.stderr)
+        return 2
+
+    result = _retro.aggregate(project_root, unit_ids, output)
+    print(
+        f"rollup written: {result.output}\n"
+        f"  included: {len(result.included)} unit(s)\n"
+        f"  missing:  {len(result.missing)} unit(s)"
+    )
+    return 0
+
+
+def _cmd_status(*, unit_id: str | None, as_json: bool, project_root: Path) -> int:
+    """Render status for one unit or all units."""
+    from dualpass import observability
+
+    return observability.render_status(project_root, unit_id=unit_id, as_json=as_json)
+
+
+def _cmd_watcher(
+    *,
+    action: str,
+    name: str,
+    project_root: Path,
+    foreground: bool = False,
+    poll_interval: int | None = None,
+    provider: str = "live",
+) -> int:
+    """Lifecycle management for background watchers."""
     from dualpass import watcher
 
     if action == "status":
@@ -310,7 +435,6 @@ def _cmd_watcher(*, action: str, name: str, project_root: Path) -> int:
         rows = []
         for n in names or list(watcher.WATCHER_NAMES):
             rows.extend(watcher.status(n, project_root=project_root))  # type: ignore[arg-type]
-        # Compact human-readable table.
         if not rows:
             print("(no watcher state recorded)")
         else:
@@ -330,10 +454,62 @@ def _cmd_watcher(*, action: str, name: str, project_root: Path) -> int:
                 print(f"watcher {n}: was not running")
         return 0 if stopped_any else 1
 
-    if action == "start" or action == "restart":
-        return _stub(f"watcher {action}", _WATCHER_MILESTONE)
+    if action in ("start", "restart"):
+        if name == "all":
+            # `start all` only makes sense as a convenience; spawn each in turn.
+            for n in watcher.WATCHER_NAMES:
+                rc = _start_one_watcher(
+                    n,
+                    project_root,
+                    foreground=foreground,
+                    poll_interval=poll_interval,
+                    provider=provider,
+                )
+                if rc != 0:
+                    return rc
+            return 0
+        return _start_one_watcher(
+            name,
+            project_root,
+            foreground=foreground,
+            poll_interval=poll_interval,
+            provider=provider,
+        )
 
     return _stub(f"watcher {action}", _WATCHER_MILESTONE)
+
+
+def _start_one_watcher(
+    name: str,
+    project_root: Path,
+    *,
+    foreground: bool,
+    poll_interval: int | None,
+    provider: str,
+) -> int:
+    """Helper: launch one named watcher; print outcome."""
+    from dualpass import watcher
+
+    poll = poll_interval if poll_interval is not None else watcher.DEFAULT_POLL_INTERVAL_SECONDS
+    try:
+        pid = watcher.start(
+            name,  # type: ignore[arg-type]
+            provider=provider,
+            project_root=project_root,
+            poll_interval_seconds=poll,
+            foreground=foreground,
+        )
+    except RuntimeError as exc:
+        print(f"dualpass watcher start: {exc}", file=sys.stderr)
+        return 1
+    if foreground:
+        # When foreground=True the start() call blocks until SIGTERM, so by here
+        # we've already shut down. Still print so scripts can sanity-check.
+        print(f"watcher {name}: exited (pid was {pid})")
+    else:
+        # In daemon mode the PARENT prints the PID; the child has detached.
+        print(f"watcher {name}: launched (pid={pid}, poll={poll}s)")
+    return 0
 
 
 def _cmd_run(
@@ -405,8 +581,33 @@ def main(argv: Sequence[str] | None = None) -> int:
             ignore_breakpoints=args.ignore_breakpoints,
             project_root=Path(args.project),
         )
+    if args.command == "status":
+        return _cmd_status(unit_id=args.unit, as_json=args.json, project_root=Path(args.project))
+    if args.command == "retro":
+        return _cmd_retro(
+            unit_id=args.unit,
+            range_spec=args.range_spec,
+            output=Path(args.output) if args.output else None,
+            project_root=Path(args.project),
+        )
     if args.command == "watcher":
-        return _cmd_watcher(action=args.action, name=args.name, project_root=Path(args.project))
+        return _cmd_watcher(
+            action=args.action,
+            name=args.name,
+            project_root=Path(args.project),
+            foreground=args.foreground,
+            poll_interval=args.poll_interval,
+            provider=args.provider,
+        )
+    if args.command == "propose-dag":
+        return _cmd_propose_dag(
+            project_root=Path(args.project),
+            non_interactive=args.non_interactive,
+            name=args.name,
+            parallel=args.parallel,
+            fan_out=args.fan_out,
+            join=args.join,
+        )
     return _stub(args.command)
 
 

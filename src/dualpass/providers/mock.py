@@ -59,7 +59,8 @@ class MockProvider(Provider):
         verdict = script.review_verdicts[min(idx, len(script.review_verdicts) - 1)]
         self._round_index[ctx.stage.name] = idx + 1
 
-        review = ctx.units_dir / f"{ctx.stage.name}-review-v{ctx.round_number}.md"
+        suffix = f"-{ctx.pass_label}" if ctx.pass_label else ""
+        review = ctx.units_dir / f"{ctx.stage.name}-review-v{ctx.round_number}{suffix}.md"
         review.write_text(
             f"# Mock review — stage {ctx.stage.name!r}\n\n"
             f"- verdict: **{verdict}**\n"
