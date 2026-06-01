@@ -21,7 +21,7 @@ from dualpass.cli import main
 
 
 def test_version_constant_is_pep440_prerelease() -> None:
-    assert dualpass.__version__ == "0.2.0a0"
+    assert dualpass.__version__ == "0.2.0a1"
 
 
 def test_top_level_exports() -> None:
@@ -81,12 +81,14 @@ def test_stub_commands_exit_two_with_structured_message(
     assert "CHANGELOG" in err.getvalue()  # points at the milestone tracker
 
 
-def test_watcher_stub_cites_watcher_milestone() -> None:
+def test_watcher_start_stub_cites_watcher_milestone() -> None:
+    """`watcher status` and `watcher stop` are now implemented; only `start`
+    and `restart` remain as stubs. They should cite the v0.3.0 milestone."""
     err = io.StringIO()
     with redirect_stderr(err):
-        rc = main(["watcher", "status"])
+        rc = main(["watcher", "start", "research"])
     assert rc == 2
-    assert "watcher" in err.getvalue()
+    assert "watcher start" in err.getvalue()
     assert "v0.3.0" in err.getvalue()
 
 

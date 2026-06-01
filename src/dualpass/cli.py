@@ -178,6 +178,11 @@ def _build_parser() -> argparse.ArgumentParser:
         default="live",
         help="Provider for triggered runs (default: live)",
     )
+    p_watcher.add_argument(
+        "--project",
+        default=".",
+        help="Project root containing .dualpass-state/ (default: current directory)",
+    )
 
     # config
     p_config = sub.add_parser(
@@ -295,6 +300,42 @@ def _cmd_init(
     return 0
 
 
+def _cmd_watcher(*, action: str, name: str, project_root: Path) -> int:
+    """Lifecycle management for background watchers (status/stop work; start stubbed)."""
+    from dualpass import watcher
+
+    if action == "status":
+        names: list[watcher.WatcherName] | None
+        names = None if name == "all" else [name]  # type: ignore[list-item]
+        rows = []
+        for n in names or list(watcher.WATCHER_NAMES):
+            rows.extend(watcher.status(n, project_root=project_root))  # type: ignore[arg-type]
+        # Compact human-readable table.
+        if not rows:
+            print("(no watcher state recorded)")
+        else:
+            for row in rows:
+                pid_str = str(row.pid) if row.pid else "-"
+                print(f"  {row.name:<10} status={row.status:<10} pid={pid_str}")
+        return 0
+
+    if action == "stop":
+        names = [name] if name != "all" else list(watcher.WATCHER_NAMES)  # type: ignore[assignment]
+        stopped_any = False
+        for n in names or []:
+            if watcher.stop(n, project_root=project_root):  # type: ignore[arg-type]
+                print(f"stopped watcher: {n}")
+                stopped_any = True
+            else:
+                print(f"watcher {n}: was not running")
+        return 0 if stopped_any else 1
+
+    if action == "start" or action == "restart":
+        return _stub(f"watcher {action}", _WATCHER_MILESTONE)
+
+    return _stub(f"watcher {action}", _WATCHER_MILESTONE)
+
+
 def _cmd_run(
     *,
     unit_id: str,
@@ -365,7 +406,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             project_root=Path(args.project),
         )
     if args.command == "watcher":
-        return _stub("watcher", _WATCHER_MILESTONE)
+        return _cmd_watcher(action=args.action, name=args.name, project_root=Path(args.project))
     return _stub(args.command)
 
 

@@ -14,6 +14,18 @@ All notable changes to dualpass are documented here. Format follows [Keep a Chan
 - `dualpass status`, `retro`, `propose-dag` commands
 - Anthropic skill format for stage skills
 
+## [0.2.0a1] — 2026-06-01
+
+### Added
+
+- **`dualpass watcher status` and `dualpass watcher stop` are now functional.** Status reports `running` / `stopped` / `stale-pid` per watcher with stale-PID detection via `os.kill(pid, 0)`. Stop signals SIGTERM and cleans up stale pidfiles.
+- PID-file lifecycle helpers in `src/dualpass/watcher.py`: atomic create via `O_CREAT | O_EXCL`, stale-pid detection, signal delivery. The fs-watching loop itself remains deferred to v0.3.0.
+- 11 new tests covering status reporting, stale-pid handling, stop semantics (including a real `multiprocessing.Process` fork→stop verification), and the CLI surface. Total 82 across the repo.
+
+### Changed
+
+- `dualpass watcher start` and `dualpass watcher restart` are the only remaining stubs in this command group. They cite the v0.3.0 milestone explicitly in their stub message.
+
 ## [0.2.0a0] — 2026-06-01
 
 ### Added
