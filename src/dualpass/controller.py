@@ -12,7 +12,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-
 StageStatus = Literal["pending", "in_flight", "complete", "blocked", "skipped"]
 ExitSignal = Literal["stop", "continue", "escalate"]
 

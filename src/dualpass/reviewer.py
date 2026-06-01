@@ -14,7 +14,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-
 ReviewVerdict = Literal["approved", "rejected", "blocked"]
 
 

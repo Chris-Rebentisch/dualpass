@@ -14,8 +14,7 @@ from contextlib import redirect_stderr, redirect_stdout
 import pytest
 
 import dualpass
-from dualpass.cli import _build_parser, main
-
+from dualpass.cli import main
 
 # ── Package-level ──────────────────────────────────────────────────────────────
 
@@ -52,8 +51,10 @@ def test_help_flag_exits_zero() -> None:
 
 def test_no_args_prints_help_and_exits_zero() -> None:
     buf = io.StringIO()
-    rc = main([])
+    with redirect_stdout(buf):
+        rc = main([])
     assert rc == 0
+    assert "dualpass" in buf.getvalue()
 
 
 # ── Stub behavior ──────────────────────────────────────────────────────────────

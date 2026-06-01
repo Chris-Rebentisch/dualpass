@@ -13,7 +13,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-
 WatcherName = Literal["research", "prompt", "handoff"]
 WatcherStatus = Literal["running", "stopped", "stale-pid"]
 

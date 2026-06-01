@@ -13,7 +13,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-
 BuildStatus = Literal["partial", "complete", "blocked"]
 ExitSignal = Literal["stop", "continue", "escalate"]
 BlockerKind = Literal["architectural", "infrastructure", "spec_defect"]

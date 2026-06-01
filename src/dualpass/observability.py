@@ -14,7 +14,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-
 EventType = Literal[
     "stage_started",
     "stage_completed",
