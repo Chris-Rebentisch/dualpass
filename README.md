@@ -1,5 +1,9 @@
 # dualpass
 
+[![tests](https://github.com/Chris-Rebentisch/dualpass/actions/workflows/test.yml/badge.svg)](https://github.com/Chris-Rebentisch/dualpass/actions/workflows/test.yml)
+[![license: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![python: 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
+
 **One agent ships the work. A different vendor ships the review.**
 
 A reliability-first agent harness for staged agentic pipelines, with cross-vendor independent review built in as a primitive. Author with Claude. Audit with Cursor. Or swap either for whatever you trust — `dualpass` is CLI-agnostic about both.
