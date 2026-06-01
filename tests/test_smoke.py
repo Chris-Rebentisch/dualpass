@@ -20,7 +20,7 @@ from dualpass.cli import main
 
 
 def test_version_constant_is_pep440_prerelease() -> None:
-    assert dualpass.__version__ == "0.1.0a1"
+    assert dualpass.__version__ == "0.1.0a2"
 
 
 def test_top_level_exports() -> None:
@@ -64,7 +64,6 @@ def test_no_args_prints_help_and_exits_zero() -> None:
     "argv,expected_msg_fragment",
     [
         (["run", "--unit", "demo-001"], "'run' is not yet implemented"),
-        (["init", "/tmp/x"], "'init' is not yet implemented"),
         (["status"], "'status' is not yet implemented"),
         (["retro", "--unit", "demo-001"], "'retro' is not yet implemented"),
         (["propose-dag"], "'propose-dag' is not yet implemented"),

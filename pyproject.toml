@@ -1,6 +1,6 @@
 [project]
 name = "dualpass"
-version = "0.1.0a1"
+version = "0.1.0a2"
 description = "A reliability-first agent harness with cross-vendor independent review built in."
 readme = "README.md"
 license = { text = "Apache-2.0" }
@@ -58,6 +58,11 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/dualpass"]
+
+# Ship the example project inside the wheel so `dualpass init` can scaffold from
+# it on a fresh install where the repo's examples/ tree is not present.
+[tool.hatch.build.targets.wheel.force-include]
+"examples/coding-agent" = "dualpass/_templates/coding-agent"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

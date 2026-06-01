@@ -68,6 +68,11 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=["coding-agent"],
         help="Example project to scaffold from (default: coding-agent)",
     )
+    p_init.add_argument(
+        "--project-name",
+        dest="project_name",
+        help="Override the project name written to config/dualpass.json (default: target dir basename)",
+    )
 
     # doctor
     p_doctor = sub.add_parser(
@@ -263,6 +268,21 @@ def _cmd_doctor(project_root: Path) -> int:
     return 0
 
 
+def _cmd_init(
+    target: Path, *, example: str = "coding-agent", project_name: str | None = None
+) -> int:
+    """Scaffold a new dualpass project into target. Returns process exit code."""
+    from dualpass import _init
+
+    try:
+        result = _init.run_init(target, template=example, project_name=project_name)
+    except _init.InitError as exc:
+        print(f"dualpass init: {exc}", file=sys.stderr)
+        return 1
+    print(_init.format_next_steps(result))
+    return 0
+
+
 def _cmd_config_validate(project_root: Path) -> int:
     """Validate every config file. Prints each error; exits 0 if valid, 1 otherwise."""
     from dualpass import config as _config
@@ -302,6 +322,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _cmd_doctor(Path(args.project))
     if args.command == "config" and args.action == "validate":
         return _cmd_config_validate(Path(args.project))
+    if args.command == "init":
+        return _cmd_init(Path(args.path), example=args.example, project_name=args.project_name)
     if args.command == "watcher":
         return _stub("watcher", _WATCHER_MILESTONE)
     return _stub(args.command)
