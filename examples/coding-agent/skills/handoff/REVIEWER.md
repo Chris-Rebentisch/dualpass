@@ -11,7 +11,7 @@ The handoff is the closing artifact. Your job is to ensure it faithfully reflect
 
 ## What you're checking
 
-1. **Required sections present.** §1 through §10 mandatory (§9 omitted only when no operator edits remain). From v2 onward, `## Changes from v(N-1)` immediately after header. Empty sections rejected.
+1. **Required sections present.** §1 through §10 mandatory (§9 omitted only when no operator edits remain). §10a Accepted Divergences is conditional — present iff `.dualpass-state/{unit_id}/divergence-accepted.json` exists; absent otherwise. From v2 onward, `## Changes from v(N-1)` immediately after header. Empty sections rejected.
 
 2. **Audit-trail linkage (the six-rule contract).**
    - Every FINAL prompt §2 CP has a §3 Build History row (same number, same labels, same order).
@@ -35,6 +35,13 @@ The handoff is the closing artifact. Your job is to ensure it faithfully reflect
 8. **Length sanity.** If the draft is over 650 lines, the operator should have been flagged. Verify the over-length is justified (e.g., three decision-amendments documented in full), not bloat (speculation, design rationale, future-unit planning beyond §10).
 
 9. **Amendment discipline.** If this is an amendment, it's content-additive only — appends a dated section, doesn't revise prior FINAL content. Silently rewriting shipped content under the amendment label is a blocker.
+
+10. **§10a Accepted Divergences fidelity (WITH-DEVIATIONS shape only).** When `divergence-accepted.json` exists:
+    - §10a present and includes `Accepted by:` + `Accepted at:` from the sidecar.
+    - §10a `### Architect rationale` reproduces the sidecar's `rationale` field verbatim.
+    - §10a `### Findings accepted` reproduces the audit FINAL's `architectural`-severity findings verbatim (Description / Evidence / Suggested remediation).
+    - No invented findings, no rewording.
+    When the sidecar is absent, §10a MUST also be absent. Inventing §10a or omitting it incorrectly is a blocker.
 
 ## What you're NOT checking
 

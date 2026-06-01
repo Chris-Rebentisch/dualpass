@@ -13,6 +13,43 @@ Possible future work (open to feedback):
 - PWD halt-and-remediate and cumulative-count cascade as enforced built-in gates (currently inherited at the doctrine level only)
 - Disk-unblock polling for hung cursor-agent reviewer subprocesses (mirrors `run_subprocess_with_reviewer_disk_unblock` in the source pipeline). v1.0.2 reads the verdict from the on-disk review file, so a hung subprocess doesn't lose the verdict — but it does still tie up the slot until timeout. A polling-and-terminate pattern would shorten that window.
 
+## [1.0.5] — 2026-06-01
+
+A live-provider dogfood at chunk-77 surfaced a more fundamental flaw than v1.0.4's preamble defect: the audit→handoff gate model itself was inverted. v1.0.4 (inherited from earlier versions) treated every PASS_WITH_DEVIATIONS audit as an architect decision — handoff refused to draft until a `*-deviations-accepted.md` file landed. In practice most audit deviations are mechanical or structural and should round-trip through the code stage without bothering the architect; only true architectural divergence (the code chose a different design point than the spec ratified) actually needs architect attention. v1.0.5 reshapes the audit verdict, the controller routing, the CLI surface, and both audit + handoff skills to match.
+
+### Changed
+
+- **Audit verdict shape — three buckets, not two.** The bundled `examples/coding-agent/skills/audit/SKILL.md` now emits a machine-stable verdict line of `**Verdict:** PASS | NEEDS_REMEDIATION | ARCHITECTURAL_DIVERGENCE` (was: `PASS | PASS_WITH_DEVIATIONS | FAIL`). Every finding carries one of four severity tags via HTML comment: `<!-- severity: mechanical|structural|organizational|architectural -->`. The verdict is derived from the strongest applicable severity: any `architectural` → `ARCHITECTURAL_DIVERGENCE`; otherwise any other → `NEEDS_REMEDIATION`; otherwise `PASS`. Audit reviewer (`audit/REVIEWER.md`) rewritten to verify honest triage — under-tagging architectural divergence and over-tagging mechanical issues are both blockers.
+- **Controller routes on the audit verdict.** `src/dualpass/controller.py` parses the audit FINAL body after the audit reviewer signs off. PASS advances to handoff. NEEDS_REMEDIATION rewinds to the `code` stage with the audit FINAL on disk as feedback, bounded by `max_audit_iterations` (default 4). ARCHITECTURAL_DIVERGENCE writes a stuck marker and halts immediately. An audit FINAL with no recognizable verdict line halts conservatively for operator inspection.
+- **Handoff skill always drafts.** The bundled `examples/coding-agent/skills/handoff/SKILL.md` no longer refuses on PASS_WITH_DEVIATIONS — there's nothing to refuse on. Two output shapes: WITHOUT-DEVIATIONS (no sidecar present) and WITH-DEVIATIONS (architect ran `accept-divergence`, sidecar present, §10a Accepted Divergences carries the architect's rationale + auditor's findings verbatim). Handoff reviewer rewritten to verify §10a fidelity against the sidecar.
+
+### Added
+
+- **`max_audit_iterations: int = 4`** field on `ProjectConfig` (`src/dualpass/config.py`) and in `src/dualpass/schemas/dualpass.json`. Bounds the audit-remediation loop independently of per-stage `max_rounds`. Example `config/dualpass.json` ships with the explicit `4`.
+- **`AuditVerdict` literal type + `_parse_audit_verdict()`** in `src/dualpass/controller.py`. Reads the audit FINAL body; matches `**Verdict:** PASS|NEEDS_REMEDIATION|ARCHITECTURAL_DIVERGENCE` case-insensitively; returns `unknown` on missing or unrecognized verdict.
+- **`_write_audit_routing_marker()`** in `src/dualpass/controller.py`. Writes one of two architect-intervention stuck markers: `<unit>-stuck-architectural-divergence.md` or `<unit>-stuck-audit-loop-exhausted.md`. Both include copy-pasteable `dualpass remediate` and `dualpass accept-divergence` commands.
+- **`dualpass remediate --unit <id>`** CLI subcommand. Architect disposition for "this IS fixable in code." Clears the stuck marker; relaunches from the `code` stage (overridable via `--from-stage`).
+- **`dualpass accept-divergence --unit <id> --rationale "..."`** CLI subcommand. Architect disposition for "ship this as documented divergence." Writes `.dualpass-state/<unit>/divergence-accepted.json` with architect + rationale + `accepted_at` + the auditor's `architectural`-severity findings reproduced verbatim, clears the stuck marker, relaunches from `handoff` (or `--no-run` to land the sidecar only).
+- **`MockScript.audit_verdicts`** field on `src/dualpass/providers/mock.py`. Test-only — lets the mock provider drive the audit verdict line across stage re-entries. Defaults to `["PASS"]`.
+- **12 new tests** under `tests/test_audit_routing.py` covering all three verdict paths, `max_audit_iterations` exhaustion, unknown-verdict halt, both architect CLI subcommands (including `--no-run`), the verdict parser, and the default-config field.
+
+### Removed
+
+- **Legacy `PASS_WITH_DEVIATIONS` and `FAIL` verdict strings** from the audit skill. The pre-v1.0.5 strings are no longer recognized by the controller's routing path. Audits that emit them halt as `unknown`.
+- **Handoff refusal-stub pattern.** The bundled `handoff/SKILL.md` no longer ships a "gate closed → write stub" path.
+
+### Migration
+
+Breaking for projects that pinned the legacy audit verdict strings or built their own tooling around the `*-deviations-accepted.md` file. Otherwise additive: existing projects pick up the new behavior on their next audit run.
+
+Projects that customized the audit or handoff skill text need to replace the bundled files (or merge the v1.0.5 shape manually). Projects that just `dualpass init`'d the example and never edited the skills get the new behavior for free.
+
+`config/dualpass.json` does NOT need to be updated — `max_audit_iterations` defaults to 4 when omitted.
+
+### Tests
+
+227 → 239 passing.
+
 ## [1.0.4] — 2026-06-01
 
 A second live-provider dogfood run against the chunk-77 scope brief surfaced the next layer of friction: the v1.0.2 diagnostic header (three HTML comment lines prepended to every artifact) was visible to claude during revision rounds. Claude read its previous artifact (with the header), treated the header as part of the artifact structure, and reproduced extra copies in its own Write-tool output. The v1.0.2 strip-one-prepend-one logic couldn't keep up: after each revision round the file accumulated more diagnostic-header triplets, the reviewer correctly rejected on the duplicate-preamble defect, and spec stage ran 7+ rounds before max_rounds halted without converging. The author IS iterating responsibly — cursor's substantive design-severity findings WERE getting addressed — but the harness was reintroducing the same mechanical fault each round.

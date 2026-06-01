@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import shutil
 import sys
 from dataclasses import dataclass, field
@@ -72,6 +73,24 @@ logger = logging.getLogger(__name__)
 
 StageStatus = Literal["pending", "in_flight", "complete", "blocked", "skipped"]
 ExitSignal = Literal["stop", "continue", "escalate"]
+
+# (v1.0.5) Audit verdicts the controller routes on. The audit skill's machine-stable
+# verdict line names exactly one of these; everything else falls back to "unknown"
+# and is treated as a halt for operator inspection.
+AuditVerdict = Literal["pass", "needs_remediation", "architectural_divergence", "unknown"]
+
+# Pre-compiled regex matches `**Verdict:** PASS|NEEDS_REMEDIATION|ARCHITECTURAL_DIVERGENCE`
+# anywhere in the audit FINAL body. Case-insensitive; permits surrounding whitespace.
+_AUDIT_VERDICT_RE = re.compile(
+    r"^\s*\*\*Verdict:\*\*\s*(PASS|NEEDS_REMEDIATION|ARCHITECTURAL_DIVERGENCE)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# The stage name that consumes audit feedback when the controller routes a
+# NEEDS_REMEDIATION verdict back through the loop. The bundled example uses
+# "code"; projects can override their stage name via the same constant.
+_CODE_STAGE_NAME = "code"
+_AUDIT_STAGE_NAME = "audit"
 
 # Stages for which a precedent-cache bundle is built ahead of the author.
 # These are the stages where peer artifacts from prior units carry the most
@@ -182,8 +201,16 @@ def run_unit(
         project_root=root,
     )
 
+    # (v1.0.5) Per-unit audit-loop counter. Bounded by cfg.project.max_audit_iterations
+    # (default 4). When the budget exhausts, the controller writes an audit-loop-exhausted
+    # stuck marker and halts for architect attention.
+    audit_iterations = 0
+    max_audit_iterations = int(getattr(cfg.project, "max_audit_iterations", 4) or 4)
+
     try:
-        for stage in stages[start_idx:]:
+        idx = start_idx
+        while idx < len(stages):
+            stage = stages[idx]
             # ── Breakpoint check ──────────────────────────────────────────
             if not ignore_breakpoints and _stage_is_breakpoint(stage, cfg.project.breakpoints):
                 run.paused_at_breakpoint = stage.name
@@ -215,6 +242,152 @@ def run_unit(
                     file=sys.stderr,
                 )
                 return 1
+
+            # ── (v1.0.5) audit-verdict routing ─────────────────────────────
+            # After the audit stage approves (the reviewer signed off on the
+            # audit artifact's structure), parse the audit's machine-stable
+            # verdict and route the unit accordingly. PASS continues to handoff;
+            # NEEDS_REMEDIATION rewinds to code; ARCHITECTURAL_DIVERGENCE halts.
+            if stage.name == _AUDIT_STAGE_NAME and result.artifact_path is not None:
+                audit_verdict = _parse_audit_verdict(result.artifact_path)
+                code_idx = _find_stage_index(stages, _CODE_STAGE_NAME)
+                emit(
+                    Event(
+                        "audit_verdict_parsed",
+                        unit=unit_id,
+                        stage=stage.name,
+                        payload={
+                            "verdict": audit_verdict,
+                            "audit_artifact": str(result.artifact_path),
+                            "audit_iterations": audit_iterations,
+                            "max_audit_iterations": max_audit_iterations,
+                        },
+                    ),
+                    project_root=root,
+                )
+
+                if audit_verdict == "pass":
+                    idx += 1
+                    continue
+
+                if audit_verdict == "needs_remediation":
+                    if code_idx is None:
+                        # No code stage to rewind to — treat as unknown.
+                        print(
+                            f"audit returned NEEDS_REMEDIATION but no "
+                            f"{_CODE_STAGE_NAME!r} stage exists to remediate; halting.",
+                            file=sys.stderr,
+                        )
+                        run.halted_at = stage.name
+                        run.halt_reason = "needs_remediation without code stage"
+                        return 1
+                    audit_iterations += 1
+                    if audit_iterations > max_audit_iterations:
+                        marker = _write_audit_routing_marker(
+                            root,
+                            unit_id,
+                            kind="audit-loop-exhausted",
+                            audit_artifact=result.artifact_path,
+                            audit_iterations=audit_iterations - 1,
+                            max_iterations=max_audit_iterations,
+                        )
+                        emit(
+                            Event(
+                                "stage_blocked",
+                                unit=unit_id,
+                                stage=stage.name,
+                                payload={
+                                    "reason": "audit_loop_exhausted",
+                                    "audit_iterations": audit_iterations - 1,
+                                    "max_audit_iterations": max_audit_iterations,
+                                    "stuck_marker": str(marker),
+                                },
+                            ),
+                            project_root=root,
+                        )
+                        run.halted_at = stage.name
+                        run.halt_reason = (
+                            f"audit_loop_exhausted ({audit_iterations - 1}/{max_audit_iterations})"
+                        )
+                        print(
+                            f"unit {unit_id!r}: audit loop exhausted "
+                            f"({audit_iterations - 1}/{max_audit_iterations}); "
+                            f"see {marker}",
+                            file=sys.stderr,
+                        )
+                        return 1
+                    print(
+                        f"audit verdict NEEDS_REMEDIATION; "
+                        f"re-entering {_CODE_STAGE_NAME!r} stage "
+                        f"(iteration {audit_iterations}/{max_audit_iterations})"
+                    )
+                    emit(
+                        Event(
+                            "audit_remediation_loop",
+                            unit=unit_id,
+                            stage=stage.name,
+                            payload={
+                                "audit_iterations": audit_iterations,
+                                "max_audit_iterations": max_audit_iterations,
+                                "re_entering_stage": _CODE_STAGE_NAME,
+                            },
+                        ),
+                        project_root=root,
+                    )
+                    idx = code_idx
+                    continue
+
+                if audit_verdict == "architectural_divergence":
+                    marker = _write_audit_routing_marker(
+                        root,
+                        unit_id,
+                        kind="architectural-divergence",
+                        audit_artifact=result.artifact_path,
+                        audit_iterations=audit_iterations,
+                        max_iterations=max_audit_iterations,
+                    )
+                    emit(
+                        Event(
+                            "stage_blocked",
+                            unit=unit_id,
+                            stage=stage.name,
+                            payload={
+                                "reason": "architectural_divergence",
+                                "stuck_marker": str(marker),
+                            },
+                        ),
+                        project_root=root,
+                    )
+                    run.halted_at = stage.name
+                    run.halt_reason = "architectural_divergence"
+                    print(
+                        f"unit {unit_id!r}: audit reported ARCHITECTURAL_DIVERGENCE; "
+                        f"architect intervention required\n  see {marker}",
+                        file=sys.stderr,
+                    )
+                    return 1
+
+                # `unknown` — audit FINAL has no recognizable verdict line.
+                # Halt for operator inspection rather than guess.
+                emit(
+                    Event(
+                        "stage_blocked",
+                        unit=unit_id,
+                        stage=stage.name,
+                        payload={"reason": "audit_verdict_unknown"},
+                    ),
+                    project_root=root,
+                )
+                run.halted_at = stage.name
+                run.halt_reason = "audit_verdict_unknown"
+                print(
+                    f"unit {unit_id!r}: audit FINAL carries no recognizable verdict "
+                    f"line; halting.\n  audit artifact: {result.artifact_path}",
+                    file=sys.stderr,
+                )
+                return 1
+
+            idx += 1
 
         emit(
             Event(
@@ -316,6 +489,90 @@ def _read_marker_safely(unit_id: str, stage_name: str, project_root: Path) -> Bu
     if marker.stage != stage_name:
         # Stale marker from a previous stage of this unit; ignore.
         return None
+    return marker
+
+
+def _parse_audit_verdict(audit_artifact: Path) -> AuditVerdict:
+    """Read the audit artifact body; return the parsed verdict.
+
+    (v1.0.5) The audit skill's machine-stable verdict line is the routing signal.
+    The artifact lives at `.dualpass-state/{unit}/audit-artifact-v{round}.md`. We
+    scan it once and return one of four values. `unknown` is the conservative
+    fallback when the file is missing, unreadable, or carries no recognizable
+    verdict line — the caller halts on `unknown` for operator inspection.
+    """
+    try:
+        body = audit_artifact.read_text(encoding="utf-8")
+    except OSError:
+        return "unknown"
+    match = _AUDIT_VERDICT_RE.search(body)
+    if match is None:
+        return "unknown"
+    value = match.group(1).strip().lower()
+    if value == "pass":
+        return "pass"
+    if value == "needs_remediation":
+        return "needs_remediation"
+    if value == "architectural_divergence":
+        return "architectural_divergence"
+    return "unknown"
+
+
+def _divergence_sidecar_path(project_root: Path, unit_id: str) -> Path:
+    """The handoff skill reads this sidecar to switch into the WITH-DEVIATIONS shape."""
+    return units_dir(project_root, unit_id) / "divergence-accepted.json"
+
+
+def _has_divergence_sidecar(project_root: Path, unit_id: str) -> bool:
+    return _divergence_sidecar_path(project_root, unit_id).is_file()
+
+
+def _write_audit_routing_marker(
+    project_root: Path,
+    unit_id: str,
+    *,
+    kind: Literal["architectural-divergence", "audit-loop-exhausted"],
+    audit_artifact: Path | None,
+    audit_iterations: int,
+    max_iterations: int,
+) -> Path:
+    """Drop a stuck-marker the architect can address with `remediate` or `accept-divergence`."""
+    marker = state_dir(project_root) / f"{unit_id}-stuck-{kind}.md"
+    artifact_line = (
+        f"- **audit artifact:** `{audit_artifact}`" if audit_artifact else ""
+    )
+    if kind == "architectural-divergence":
+        explainer = (
+            "The audit reported at least one `architectural` finding — the code\n"
+            "chose a different design point than the spec ratified. The code author\n"
+            "cannot resolve this without your input."
+        )
+    else:
+        explainer = (
+            f"The audit returned `NEEDS_REMEDIATION` {audit_iterations} times in a\n"
+            f"row without converging (max_audit_iterations={max_iterations}). The\n"
+            f"auditor and code author could not agree without architect input."
+        )
+    marker.write_text(
+        f"# Architect intervention required ({kind})\n\n"
+        f"- **unit:** `{unit_id}`\n"
+        f"- **halted at:** {datetime.now(UTC).isoformat()}\n"
+        f"- **audit iterations consumed:** {audit_iterations}/{max_iterations}\n"
+        f"{artifact_line}\n\n"
+        f"## What this means\n\n"
+        f"{explainer}\n\n"
+        f"## What to do\n\n"
+        f"Inspect the audit FINAL, decide which path to take, then run ONE of:\n\n"
+        f"```\n"
+        f"# Try again — you believe the divergence is fixable in code:\n"
+        f"dualpass remediate --unit {unit_id}\n\n"
+        f"# Accept the divergence — ship it documented in the handoff:\n"
+        f"dualpass accept-divergence --unit {unit_id} \\\n"
+        f"  --rationale \"why this divergence is acceptable\"\n"
+        f"```\n\n"
+        f"Either command clears this marker and re-enters the pipeline.\n",
+        encoding="utf-8",
+    )
     return marker
 
 
@@ -510,6 +767,18 @@ def _resolve_start_index(stages: tuple, from_stage: str | None) -> int | None:
         return 0
     for i, stage in enumerate(stages):
         if stage.name == from_stage:
+            return i
+    return None
+
+
+def _find_stage_index(stages: tuple, name: str) -> int | None:
+    """Return the index of a stage by name, or None if it isn't configured.
+
+    Used by the v1.0.5 audit-routing path to rewind to the code stage on a
+    NEEDS_REMEDIATION verdict.
+    """
+    for i, stage in enumerate(stages):
+        if stage.name == name:
             return i
     return None
 

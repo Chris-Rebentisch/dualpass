@@ -34,12 +34,16 @@ class PerLabelMock(Provider):
 
     def invoke_author(self, ctx: StageContext) -> AuthorResult:
         artifact = ctx.units_dir / f"{ctx.stage.name}-artifact-v{ctx.round_number}.md"
-        # Write YAML frontmatter so `check-frontmatter` preflight passes.
-        artifact.write_text(
+        # Write YAML frontmatter so `check-frontmatter` preflight passes. The
+        # audit stage carries the v1.0.5 machine-stable verdict line so the
+        # controller's audit-routing path advances to handoff.
+        body = (
             f"---\ntitle: Mock {ctx.stage.name}\nstage: {ctx.stage.name}\n---\n\n"
-            f"# Mock for {ctx.stage.name}\n",
-            encoding="utf-8",
+            f"# Mock for {ctx.stage.name}\n"
         )
+        if ctx.stage.name == "audit":
+            body += "\n## Verdict\n\n**Verdict:** PASS\n"
+        artifact.write_text(body, encoding="utf-8")
         # Satisfy `check-marker-frontmatter` with a benign continue marker.
         write_build_marker(
             BuildMarker(

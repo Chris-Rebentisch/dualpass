@@ -227,6 +227,92 @@ def _build_parser() -> argparse.ArgumentParser:
         help="(start only) Override the polling interval in seconds (default: 5)",
     )
 
+    # remediate (v1.0.5) — architect "try again in code" disposition
+    p_remediate = sub.add_parser(
+        "remediate",
+        help="(v1.0.5) Clear an architectural-divergence stuck marker and relaunch from code",
+        description=(
+            "When the audit emits ARCHITECTURAL_DIVERGENCE or the audit-remediation loop\n"
+            "exhausts max_audit_iterations, the controller halts and writes a stuck marker.\n"
+            "Use this command when you've inspected the marker + audit FINAL and decided the\n"
+            "divergence IS fixable in code — the command clears the marker, resets the audit\n"
+            "iteration counter for this re-entry, and re-launches the unit from the code stage."
+        ),
+    )
+    p_remediate.add_argument("--unit", required=True, help="Unit identifier")
+    p_remediate.add_argument(
+        "--from-stage",
+        dest="from_stage",
+        default="code",
+        help="Stage to re-enter (default: code)",
+    )
+    p_remediate.add_argument(
+        "--provider",
+        choices=["live", "mock"],
+        default="live",
+        help="Provider for the relaunched run (default: live)",
+    )
+    p_remediate.add_argument(
+        "--ignore-breakpoints",
+        dest="ignore_breakpoints",
+        action="store_true",
+        help="Walk through configured breakpoints on relaunch",
+    )
+    p_remediate.add_argument(
+        "--project",
+        default=".",
+        help="Project root containing config/ (default: current directory)",
+    )
+
+    # accept-divergence (v1.0.5) — architect "ship this as documented divergence" disposition
+    p_accept = sub.add_parser(
+        "accept-divergence",
+        help="(v1.0.5) Accept an architectural divergence; advance to handoff (WITH-DEVIATIONS shape)",
+        description=(
+            "When the audit emits ARCHITECTURAL_DIVERGENCE and you've decided the\n"
+            "divergence IS the right call, use this command to ship it. The command\n"
+            "writes a divergence-accepted.json sidecar (the architect's name + rationale\n"
+            "+ the auditor's findings reproduced verbatim), clears the stuck marker, and\n"
+            "re-launches the unit from the handoff stage. The handoff drafts the\n"
+            "WITH-DEVIATIONS shape — §10a Accepted Divergences carries your rationale\n"
+            "and the auditor's findings."
+        ),
+    )
+    p_accept.add_argument("--unit", required=True, help="Unit identifier")
+    p_accept.add_argument(
+        "--rationale",
+        required=True,
+        help="Architect rationale (free text; reproduced verbatim in §10a)",
+    )
+    p_accept.add_argument(
+        "--architect",
+        default=None,
+        help="Architect name/handle (default: $USER)",
+    )
+    p_accept.add_argument(
+        "--provider",
+        choices=["live", "mock"],
+        default="live",
+        help="Provider for the relaunched handoff (default: live)",
+    )
+    p_accept.add_argument(
+        "--ignore-breakpoints",
+        dest="ignore_breakpoints",
+        action="store_true",
+        help="Walk through configured breakpoints on relaunch",
+    )
+    p_accept.add_argument(
+        "--no-run",
+        dest="no_run",
+        action="store_true",
+        help="Write the sidecar + clear the stuck marker, but don't relaunch the handoff stage",
+    )
+    p_accept.add_argument(
+        "--project",
+        default=".",
+        help="Project root containing config/ (default: current directory)",
+    )
+
     # config
     p_config = sub.add_parser(
         "config",
@@ -539,6 +625,181 @@ def _cmd_run(
     )
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# v1.0.5 — architect dispositions
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def _clear_stuck_markers(project_root: Path, unit_id: str) -> list[Path]:
+    """Delete every architect-intervention stuck marker for this unit.
+
+    There can be at most one in practice (the controller writes either
+    `architectural-divergence` OR `audit-loop-exhausted`, never both), but
+    we glob defensively so a leftover marker from an earlier run gets
+    cleaned up too.
+    """
+    from dualpass.memory import state_dir
+
+    removed: list[Path] = []
+    state = state_dir(project_root)
+    for kind in ("architectural-divergence", "audit-loop-exhausted"):
+        marker = state / f"{unit_id}-stuck-{kind}.md"
+        if marker.is_file():
+            marker.unlink()
+            removed.append(marker)
+    return removed
+
+
+def _cmd_remediate(
+    *,
+    unit_id: str,
+    from_stage: str,
+    provider: str,
+    ignore_breakpoints: bool,
+    project_root: Path,
+) -> int:
+    """Architect disposition: try again in code. Clear stuck markers and relaunch."""
+    from dualpass import controller
+
+    cleared = _clear_stuck_markers(project_root, unit_id)
+    if not cleared:
+        print(
+            f"dualpass remediate: no architect-intervention stuck marker found for "
+            f"unit {unit_id!r}; nothing to clear.",
+            file=sys.stderr,
+        )
+        return 1
+    for path in cleared:
+        print(f"cleared stuck marker: {path}")
+
+    print(f"relaunching unit {unit_id!r} from stage {from_stage!r}")
+    return controller.run_unit(
+        unit_id,
+        from_stage=from_stage,
+        provider=provider,
+        project_root=project_root,
+        ignore_breakpoints=ignore_breakpoints,
+    )
+
+
+def _read_architectural_findings(project_root: Path, unit_id: str) -> list[dict[str, object]]:
+    """Best-effort extraction of `architectural`-severity finding blocks from the audit FINAL.
+
+    The audit author tags each finding with `<!-- severity: architectural -->`. We
+    scan the latest audit artifact body, slice out the contiguous block belonging
+    to each architectural finding, and pass it to the handoff as opaque text. The
+    handoff skill is responsible for re-rendering — we just preserve the source.
+
+    Returns a list of dicts shaped `{"index": int, "body": str}`. Empty list when
+    no audit artifact is present or no architectural findings are tagged (which is
+    surprising but not fatal; the architect can still accept-divergence and the
+    handoff will note the empty list).
+    """
+    import re as _re
+
+    from dualpass.memory import units_dir
+
+    u = units_dir(project_root, unit_id)
+    candidates = sorted(u.glob("audit-artifact-v*.md"))
+    if not candidates:
+        return []
+    audit_body = candidates[-1].read_text(encoding="utf-8")
+
+    findings: list[dict[str, object]] = []
+    severity_re = _re.compile(
+        r"<!--\s*severity:\s*architectural\s*-->", _re.IGNORECASE
+    )
+    finding_header_re = _re.compile(
+        r"^(#+\s*Finding\s*\d+.*)$", _re.IGNORECASE | _re.MULTILINE
+    )
+
+    # Find every architectural-severity tag, walk backward to the nearest
+    # Finding header, walk forward to the next Finding header (or EOF). The
+    # body in between is what we hand to the handoff verbatim.
+    headers: list[tuple[int, int]] = [
+        (m.start(), m.end()) for m in finding_header_re.finditer(audit_body)
+    ]
+    for match in severity_re.finditer(audit_body):
+        sev_idx = match.start()
+        # Header that opens this finding (largest start <= sev_idx).
+        opener: tuple[int, int] | None = None
+        for h_start, h_end in headers:
+            if h_start <= sev_idx:
+                opener = (h_start, h_end)
+            else:
+                break
+        if opener is None:
+            continue
+        # Closer = next header start strictly after sev_idx, or EOF.
+        closer = len(audit_body)
+        for h_start, _ in headers:
+            if h_start > sev_idx:
+                closer = h_start
+                break
+        body = audit_body[opener[0] : closer].rstrip()
+        findings.append({"finding_index": len(findings) + 1, "body": body})
+    return findings
+
+
+def _cmd_accept_divergence(
+    *,
+    unit_id: str,
+    rationale: str,
+    architect: str | None,
+    provider: str,
+    ignore_breakpoints: bool,
+    no_run: bool,
+    project_root: Path,
+) -> int:
+    """Architect disposition: accept the divergence; write sidecar + relaunch handoff."""
+    import json as _json
+    import os
+    from datetime import UTC, datetime
+
+    from dualpass import controller
+    from dualpass.memory import units_dir
+
+    cleared = _clear_stuck_markers(project_root, unit_id)
+    if not cleared:
+        print(
+            f"dualpass accept-divergence: no architect-intervention stuck marker "
+            f"found for unit {unit_id!r}.",
+            file=sys.stderr,
+        )
+        # We still write the sidecar — operator may be running this proactively
+        # before the next audit. But signal the unusual state.
+    for path in cleared:
+        print(f"cleared stuck marker: {path}")
+
+    findings = _read_architectural_findings(project_root, unit_id)
+
+    sidecar_payload = {
+        "unit": unit_id,
+        "architect": architect or os.environ.get("USER", "unknown"),
+        "rationale": rationale,
+        "accepted_at": datetime.now(UTC).isoformat(),
+        "audit_findings": findings,
+    }
+    u = units_dir(project_root, unit_id)
+    sidecar = u / "divergence-accepted.json"
+    sidecar.write_text(_json.dumps(sidecar_payload, indent=2) + "\n", encoding="utf-8")
+    print(f"wrote divergence-accepted sidecar: {sidecar}")
+    print(f"  architectural findings preserved: {len(findings)}")
+
+    if no_run:
+        print("(--no-run set — skipping handoff relaunch)")
+        return 0
+
+    print(f"relaunching unit {unit_id!r} from stage 'handoff'")
+    return controller.run_unit(
+        unit_id,
+        from_stage="handoff",
+        provider=provider,
+        project_root=project_root,
+        ignore_breakpoints=ignore_breakpoints,
+    )
+
+
 def _cmd_config_validate(project_root: Path) -> int:
     """Validate every config file. Prints each error; exits 0 if valid, 1 otherwise."""
     from dualpass import config as _config
@@ -614,6 +875,24 @@ def main(argv: Sequence[str] | None = None) -> int:
             parallel=args.parallel,
             fan_out=args.fan_out,
             join=args.join,
+        )
+    if args.command == "remediate":
+        return _cmd_remediate(
+            unit_id=args.unit,
+            from_stage=args.from_stage,
+            provider=args.provider,
+            ignore_breakpoints=args.ignore_breakpoints,
+            project_root=Path(args.project),
+        )
+    if args.command == "accept-divergence":
+        return _cmd_accept_divergence(
+            unit_id=args.unit,
+            rationale=args.rationale,
+            architect=args.architect,
+            provider=args.provider,
+            ignore_breakpoints=args.ignore_breakpoints,
+            no_run=args.no_run,
+            project_root=Path(args.project),
         )
     return _stub(args.command)
 

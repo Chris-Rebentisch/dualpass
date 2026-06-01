@@ -34,9 +34,19 @@ from .base import AuthorResult, Provider, ReviewResult, ReviewVerdict, StageCont
 
 @dataclass
 class MockScript:
-    """How the mock should respond for one stage across rounds."""
+    """How the mock should respond for one stage across rounds.
+
+    `audit_verdicts` (v1.0.5) is consulted only when the stage is `audit`. The
+    controller parses the audit FINAL body for `**Verdict:** PASS|NEEDS_REMEDIATION|
+    ARCHITECTURAL_DIVERGENCE` and routes on it. Tests that want to drive the
+    remediation loop / architectural-divergence halt path script this list.
+    Defaults to ["PASS"] so the happy-path controller test keeps working.
+    """
 
     review_verdicts: list[ReviewVerdict] = field(default_factory=lambda: ["approved"])
+    audit_verdicts: list[str] = field(
+        default_factory=lambda: ["PASS"]
+    )
 
 
 @dataclass
@@ -66,6 +76,9 @@ class MockProvider(Provider):
         self._markers = markers or {}
         # Per-stage cursor into the scripted verdict list.
         self._round_index: dict[str, int] = {}
+        # (v1.0.5) Per-unit cursor into audit_verdicts so a NEEDS_REMEDIATION→PASS
+        # sequence advances across re-entries of the audit stage.
+        self._audit_verdict_cursor: int = 0
 
     # ── Author ─────────────────────────────────────────────────────────────
 
@@ -75,7 +88,7 @@ class MockProvider(Provider):
         # built-in `check-frontmatter` preflight gate. Real author skills are
         # expected to produce richer frontmatter; the mock only needs enough to
         # exercise the controller's wiring end-to-end.
-        artifact.write_text(
+        body = (
             f"---\n"
             f"title: Mock {ctx.stage.name} artifact\n"
             f"unit: {ctx.unit_id}\n"
@@ -85,9 +98,22 @@ class MockProvider(Provider):
             f"# Mock artifact — stage {ctx.stage.name!r}\n\n"
             f"- unit: `{ctx.unit_id}`\n"
             f"- round: {ctx.round_number}\n"
-            f"- author_skill: `{ctx.stage.author_skill}`\n",
-            encoding="utf-8",
+            f"- author_skill: `{ctx.stage.author_skill}`\n"
         )
+        if ctx.stage.name == "audit":
+            # (v1.0.5) Synthesize the audit's machine-stable verdict line the
+            # controller routes on. The cursor walks the script across audit
+            # re-entries so a NEEDS_REMEDIATION→PASS sequence advances.
+            script = self._scripts.get(ctx.stage.name, MockScript())
+            verdicts = script.audit_verdicts or ["PASS"]
+            cursor = min(self._audit_verdict_cursor, len(verdicts) - 1)
+            verdict = verdicts[cursor]
+            self._audit_verdict_cursor += 1
+            body += (
+                f"\n## Verdict\n\n"
+                f"**Verdict:** {verdict}\n"
+            )
+        artifact.write_text(body, encoding="utf-8")
         # Write the build-complete marker after the artifact lands. Default is
         # a continue-signal marker so `check-marker-frontmatter` passes and the
         # controller proceeds to the reviewer; tests can override per stage.

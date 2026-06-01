@@ -21,7 +21,7 @@ from dualpass.cli import main
 
 
 def test_version_constant_is_v1() -> None:
-    assert dualpass.__version__ == "1.0.4"
+    assert dualpass.__version__ == "1.0.5"
 
 
 def test_top_level_exports() -> None:
@@ -46,7 +46,18 @@ def test_help_flag_exits_zero() -> None:
     assert exc.value.code == 0
     output = buf.getvalue()
     # All v1 commands should be advertised in --help output.
-    for cmd in ("init", "doctor", "run", "status", "retro", "propose-dag", "watcher", "config"):
+    for cmd in (
+        "init",
+        "doctor",
+        "run",
+        "status",
+        "retro",
+        "propose-dag",
+        "watcher",
+        "config",
+        "remediate",
+        "accept-divergence",
+    ):
         assert cmd in output, f"command {cmd!r} missing from --help"
 
 

@@ -265,10 +265,21 @@ def test_run_unit_works_with_live_provider_against_fake_clis(scaffolded_project:
     bin_dir = scaffolded_project / "bin"
     bin_dir.mkdir()
     author_path = bin_dir / "fake-author.sh"
+    # (v1.0.5) The audit stage's machine-stable verdict line drives the
+    # controller's routing. The fake author inspects its prompt argv for the
+    # audit-stage skill marker; when present, it appends `**Verdict:** PASS`
+    # so the controller advances to handoff. All other stages emit the same
+    # generic body.
     author_path.write_text(
         "#!/bin/sh\n"
-        "printf -- '---\\ntitle: fake stage output\\n---\\n\\n"
+        "if printf %s \"$*\" | grep -q '<skill name=\"audit\"'; then\n"
+        "  printf -- '---\\ntitle: fake audit output\\n---\\n\\n"
+        "# stage output\\n\\nbody from author\\n\\n"
+        "## Verdict\\n\\n**Verdict:** PASS\\n'\n"
+        "else\n"
+        "  printf -- '---\\ntitle: fake stage output\\n---\\n\\n"
         "# stage output\\n\\nbody from author\\n'\n"
+        "fi\n"
     )
     author_path.chmod(author_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     reviewer_path = bin_dir / "fake-reviewer.sh"

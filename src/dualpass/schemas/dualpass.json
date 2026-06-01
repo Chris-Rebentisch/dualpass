@@ -54,6 +54,12 @@
       }
     },
     "single_flight_lockfile": { "type": "boolean" },
-    "auto_lock_finals": { "type": "boolean" }
+    "auto_lock_finals": { "type": "boolean" },
+    "max_audit_iterations": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 20,
+      "description": "(v1.0.5) Maximum times the controller will route a NEEDS_REMEDIATION audit verdict back to the code stage before halting for architect attention. Independent of stage-level max_rounds. Defaults to 4 when omitted."
+    }
   }
 }

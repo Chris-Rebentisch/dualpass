@@ -21,5 +21,6 @@
     "progress_signal": "build_marker_hash"
   },
   "single_flight_lockfile": true,
-  "auto_lock_finals": true
+  "auto_lock_finals": true,
+  "max_audit_iterations": 4
 }

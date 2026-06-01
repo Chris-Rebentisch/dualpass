@@ -55,6 +55,10 @@ class ProjectConfig:
     circuit_breaker: dict[str, Any]
     single_flight_lockfile: bool
     auto_lock_finals: bool
+    # (v1.0.5) Audit-loop budget: bounds how many times NEEDS_REMEDIATION verdicts
+    # route the unit back through the code stage. Independent of per-stage
+    # max_rounds. Default 4 when the project config omits it.
+    max_audit_iterations: int = 4
 
 
 @dataclass(frozen=True)
@@ -221,6 +225,7 @@ def load_project_config(project_root: Path) -> ProjectConfig:
         circuit_breaker=dict(data["circuit_breaker"]),
         single_flight_lockfile=bool(data["single_flight_lockfile"]),
         auto_lock_finals=bool(data["auto_lock_finals"]),
+        max_audit_iterations=int(data.get("max_audit_iterations", 4)),
     )
 
 
