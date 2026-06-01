@@ -6,14 +6,29 @@ All notable changes to dualpass are documented here. Format follows [Keep a Chan
 
 ### Planned for 0.1.0 (v1)
 
-- Controller with single-flight lockfile, circuit breaker, auto-relaunch
-- Fixed-cycle stage abstraction with named stages, configurable per project
+- Live (subprocess-based) provider for real `claude` + `cursor-agent` invocations
 - Dual-pass reviewer with cross-vendor fallback (D479-style)
 - Three background watchers (research-complete → outline, prompt-drafts, handoff-finals) with §6.10-style PID-parsing fix and split-parent/lockfile guards
-- Mock provider for offline smoke tests
-- `dualpass run`, `status`, `retro`, `propose-dag` commands
+- Circuit breaker (no-progress detection across consecutive failed rounds)
+- Auto-relaunch on transient errors
+- `dualpass status`, `retro`, `propose-dag` commands
 - Anthropic skill format for stage skills
-- Apache 2.0 license
+
+## [0.2.0a0] — 2026-06-01
+
+### Added
+
+- **`dualpass run` is now functional** with the mock provider. End-to-end stage chain execution: research → outline → spec → prompt → code → audit → handoff. Honors project-level breakpoints (`--ignore-breakpoints` to run through). Resumable via `--from-stage <name>`.
+- **`src/dualpass/providers/`** — provider abstraction. `Provider` ABC, `StageContext`, `AuthorResult`, `ReviewResult`, `ReviewVerdict`. Single shipping implementation: `MockProvider` (deterministic, offline, writes real artifacts). Live (subprocess-based) provider deferred to a later milestone.
+- **`MockScript`** — per-stage scripting so tests can exercise reject/retry loops without randomness. Cursor sticks at the last verdict when the script is shorter than the round count.
+- **`src/dualpass/controller.py`** — full `run_unit` implementation: acquires single-flight lockfile, walks stages in order, honors breakpoints + `--from-stage`, retries up to `max_rounds` on rejection, halts cleanly on max-rounds-exhausted, releases lock in `finally`.
+- **`src/dualpass/observability.py`** — append-only JSONL event stream at `.dualpass-state/<unit>-events.jsonl`. Closed `EventType` vocabulary (`unit_started`, `stage_round_started`, `stage_completed`, `stage_revision_requested`, `stage_blocked`, `breakpoint_hit`, `lockfile_*`).
+- **`src/dualpass/memory.py`** — atomic `acquire_lock` (via `os.O_CREAT | os.O_EXCL`), `release_lock`, `read_lock`, `units_dir` helpers. State layout under `.dualpass-state/<unit>/<stage>-{artifact,review}-v<round>.md`.
+- 26 new tests (7 mock provider + 14 controller + library/CLI surface). Total 79 across the repo.
+
+### Changed
+
+- `run` and `reviewer.review` stub messages updated to clarify v0.2.0a0 scope (mock works; live lands later).
 
 ## [0.1.0a2] — 2026-06-01
 

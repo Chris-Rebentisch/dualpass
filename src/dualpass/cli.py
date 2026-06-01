@@ -104,7 +104,19 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_run.add_argument(
         "--from-stage",
+        dest="from_stage",
         help="Resume from this stage instead of the start of the chain",
+    )
+    p_run.add_argument(
+        "--ignore-breakpoints",
+        dest="ignore_breakpoints",
+        action="store_true",
+        help="Run through configured breakpoints (default: respect them and pause)",
+    )
+    p_run.add_argument(
+        "--project",
+        default=".",
+        help="Project root containing the config/ directory (default: current directory)",
     )
 
     # status
@@ -283,6 +295,26 @@ def _cmd_init(
     return 0
 
 
+def _cmd_run(
+    *,
+    unit_id: str,
+    provider: str,
+    from_stage: str | None,
+    ignore_breakpoints: bool,
+    project_root: Path,
+) -> int:
+    """Drive one unit through the configured stage chain."""
+    from dualpass import controller
+
+    return controller.run_unit(
+        unit_id,
+        from_stage=from_stage,
+        provider=provider,
+        project_root=project_root,
+        ignore_breakpoints=ignore_breakpoints,
+    )
+
+
 def _cmd_config_validate(project_root: Path) -> int:
     """Validate every config file. Prints each error; exits 0 if valid, 1 otherwise."""
     from dualpass import config as _config
@@ -324,6 +356,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _cmd_config_validate(Path(args.project))
     if args.command == "init":
         return _cmd_init(Path(args.path), example=args.example, project_name=args.project_name)
+    if args.command == "run":
+        return _cmd_run(
+            unit_id=args.unit,
+            provider=args.provider,
+            from_stage=args.from_stage,
+            ignore_breakpoints=args.ignore_breakpoints,
+            project_root=Path(args.project),
+        )
     if args.command == "watcher":
         return _stub("watcher", _WATCHER_MILESTONE)
     return _stub(args.command)

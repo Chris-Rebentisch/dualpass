@@ -1,8 +1,8 @@
-"""Smoke tests for the v0.1.0a1 scaffolding.
+"""Smoke tests for the v0.2.0a0 release.
 
 These tests verify the package imports cleanly, the CLI argparse surface is sane,
-and stub commands emit the expected NotImplementedError signal. They do NOT exercise
-unimplemented functionality.
+and remaining stub commands emit the expected NotImplementedError signal. They do
+NOT exercise unimplemented functionality.
 """
 
 from __future__ import annotations
@@ -10,6 +10,7 @@ from __future__ import annotations
 import io
 import sys
 from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
 
 import pytest
 
@@ -20,7 +21,7 @@ from dualpass.cli import main
 
 
 def test_version_constant_is_pep440_prerelease() -> None:
-    assert dualpass.__version__ == "0.1.0a2"
+    assert dualpass.__version__ == "0.2.0a0"
 
 
 def test_top_level_exports() -> None:
@@ -63,7 +64,6 @@ def test_no_args_prints_help_and_exits_zero() -> None:
 @pytest.mark.parametrize(
     "argv,expected_msg_fragment",
     [
-        (["run", "--unit", "demo-001"], "'run' is not yet implemented"),
         (["status"], "'status' is not yet implemented"),
         (["retro", "--unit", "demo-001"], "'retro' is not yet implemented"),
         (["propose-dag"], "'propose-dag' is not yet implemented"),
@@ -116,11 +116,18 @@ def test_module_imports_cleanly(module_name: str) -> None:
 # ── Stub functions raise NotImplementedError, not silent stubs ────────────────
 
 
-def test_controller_run_unit_raises_notimplemented() -> None:
-    from dualpass.controller import run_unit
+def test_reviewer_invoke_raises_notimplemented() -> None:
+    """reviewer.review is not yet wired — landing in v0.3.0+."""
+    from dualpass.reviewer import review
 
-    with pytest.raises(NotImplementedError, match="not yet implemented"):
-        run_unit("demo-001")
+    with pytest.raises(NotImplementedError, match="not yet wired"):
+        review(
+            Path("/tmp/does-not-matter"),
+            stage="x",
+            unit_id="y",
+            reviewer_skill=Path("/tmp/skill.md"),
+            project_root=Path("/tmp"),
+        )
 
 
 def test_memory_lock_present_is_implemented() -> None:

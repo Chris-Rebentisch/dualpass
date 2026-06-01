@@ -36,5 +36,13 @@ def review(
     project_root: Path,
     dual_pass: bool = False,
 ) -> ReviewResult:
-    """Invoke the reviewer (and fallback if exhausted) and return the verdict."""
-    raise NotImplementedError("reviewer.review — landing in v0.2.0")
+    """Invoke the reviewer (and fallback if exhausted) and return the verdict.
+
+    v0.2.0a0 status: the live (subprocess-based) reviewer is not yet wired. Use
+    `providers.MockProvider.invoke_reviewer` for offline runs. The cross-vendor
+    fallback mechanic lands once the live provider exists.
+    """
+    raise NotImplementedError(
+        "reviewer.review is not yet wired — v0.2.0a0 ships the mock provider only. "
+        "Use providers.MockProvider for offline runs. Live reviewer lands later."
+    )
