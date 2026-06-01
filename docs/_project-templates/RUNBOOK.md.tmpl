@@ -1,0 +1,30 @@
+# Runbook — {{project_name}}
+
+Operational notes specific to this project. dualpass's own runbook (recovery procedures) lives in [dualpass/docs/RUNBOOK.md](https://github.com/Chris-Rebentisch/dualpass/blob/main/docs/RUNBOOK.md); this file is for *project*-specific operational details.
+
+## How to run a unit
+
+```bash
+# Mock provider (smoke):
+dualpass run --unit <unit-id> --provider mock
+
+# Live provider (real cost):
+dualpass run --unit <unit-id> --provider live
+```
+
+## Approximate cost per unit
+
+- Mock: $0 (no LLM calls)
+- Live: $X–Y depending on stage complexity. Track via `.dualpass-state/<unit>-cost-summary.md`.
+
+## Project-specific gates
+
+[List any custom gates this project ships in `gates/`.]
+
+## Project-specific watchers / scheduled jobs
+
+[If this project schedules jobs via cron / launchd / systemd, document the schedules here.]
+
+## On-call / escalation
+
+[If multiple people use this project, name the on-call rotation and escalation path.]

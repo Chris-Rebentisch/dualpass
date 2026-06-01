@@ -1,0 +1,53 @@
+# Named agent roles. Each role maps to a CLI invocation template.
+# dualpass shells out to whatever CLI you have installed — no vendor SDKs.
+#
+# Cross-vendor reviewer pattern: author runs on Claude, reviewer runs on Cursor.
+# Different vendor = different training data = different failure modes = catches
+# what same-vendor review misses.
+
+roles:
+  author:
+    command: >-
+      claude --dangerously-skip-permissions
+      --model claude-opus-4-6
+      -p {prompt}
+      --output-format json
+    timeout_seconds: 5400
+    transient_retries: 3
+    transient_retry_delay_seconds: 10
+    transient_retry_patterns:
+      - "ETIMEDOUT"
+      - "\\[unavailable\\]"
+      - "ECONNRESET"
+
+  reviewer:
+    command: >-
+      cursor-agent --yolo --trust --approve-mcps
+      -p {prompt}
+      --output-format json
+    timeout_seconds: 5400
+    transient_retries: 3
+    transient_retry_delay_seconds: 10
+
+  reviewer_fallback:
+    command: >-
+      env -u ANTHROPIC_API_KEY CLAUDE_CODE_MAX_OUTPUT_TOKENS=64000
+      claude --dangerously-skip-permissions
+      --model claude-opus-4-6
+      -p {prompt}
+      --output-format json
+    timeout_seconds: 5400
+    activate_after_consecutive_exhausted: 3
+    exhaustion_patterns:
+      - "\\[resource_exhausted\\]"
+      - "rate_limit_exceeded"
+
+  # Reviewer template for the audit stage. Audit reviewers have a higher compute floor
+  # — they must run live-fire probes (test execution, lint checks) before approving.
+  audit_reviewer:
+    command: >-
+      cursor-agent --yolo --trust --approve-mcps
+      -p {prompt}
+      --output-format json
+    timeout_seconds: 5400
+    transient_retries: 3

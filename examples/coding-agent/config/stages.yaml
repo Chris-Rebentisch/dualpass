@@ -1,0 +1,70 @@
+# The 7-stage coding pipeline. Each stage has an author skill (the agent that produces
+# the artifact) and a reviewer skill (the agent that judges it). dual_pass_reviewer:
+# true means TWO reviewers run in parallel (structural + substantive) and both must
+# approve.
+#
+# Edit freely. Drop stages you don't need; add stages your project requires.
+
+stages:
+  - name: research
+    author_skill: skills/research/SKILL.md
+    reviewer_skill: skills/research/REVIEWER.md
+    preflight_gates:
+      - check-frontmatter
+    max_rounds: 6
+    breakpoint_default: false
+
+  - name: outline
+    author_skill: skills/outline/SKILL.md
+    reviewer_skill: skills/outline/REVIEWER.md
+    preflight_gates:
+      - check-frontmatter
+      - check-line-citations
+    max_rounds: 6
+    requires_predecessor: research
+
+  - name: spec
+    author_skill: skills/spec/SKILL.md
+    reviewer_skill: skills/spec/REVIEWER.md
+    dual_pass_reviewer: true
+    preflight_gates:
+      - check-frontmatter
+      - check-line-citations
+      - check-ac1-wording
+    max_rounds: 8
+    requires_predecessor: outline
+
+  - name: prompt
+    author_skill: skills/prompt/SKILL.md
+    reviewer_skill: skills/prompt/REVIEWER.md
+    dual_pass_reviewer: true
+    preflight_gates:
+      - check-frontmatter
+      - check-line-citations
+    max_rounds: 6
+    requires_predecessor: spec
+
+  - name: code
+    author_skill: skills/code/SKILL.md
+    reviewer_skill: null   # code stage uses the dedicated audit stage for review
+    preflight_gates:
+      - check-marker-frontmatter
+    max_rounds: 1
+    requires_predecessor: prompt
+    breakpoint_default: true   # default: pause before code so you can review intent
+
+  - name: audit
+    author_skill: skills/audit/SKILL.md
+    reviewer_skill: skills/audit/REVIEWER.md
+    preflight_gates:
+      - check-frontmatter
+    max_rounds: 6
+    requires_predecessor: code
+
+  - name: handoff
+    author_skill: skills/handoff/SKILL.md
+    reviewer_skill: skills/handoff/REVIEWER.md
+    preflight_gates:
+      - check-frontmatter
+    max_rounds: 6
+    requires_predecessor: audit

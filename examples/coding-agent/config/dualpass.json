@@ -1,0 +1,25 @@
+{
+  "$schema": "https://github.com/Chris-Rebentisch/dualpass/raw/main/schemas/dualpass.json",
+  "version": "0.1.0",
+  "project_name": "coding-agent (example)",
+  "unit_id_pattern": "<slug>",
+  "max_revision_rounds": {
+    "default": 6,
+    "spec": 8
+  },
+  "breakpoints": {
+    "research": false,
+    "outline": false,
+    "spec": false,
+    "prompt": false,
+    "code": true,
+    "audit": false,
+    "handoff": false
+  },
+  "circuit_breaker": {
+    "max_no_progress_relaunches": 3,
+    "progress_signal": "build_marker_hash"
+  },
+  "single_flight_lockfile": true,
+  "auto_lock_finals": true
+}

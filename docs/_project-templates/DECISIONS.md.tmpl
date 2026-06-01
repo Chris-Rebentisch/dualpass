@@ -1,0 +1,33 @@
+# Decisions — {{project_name}}
+
+**Next free decision number: D001**
+
+This is the canonical registry of locked decisions for this project. Decisions are append-only — once locked, they don't change in place. Supersessions get a new entry that explicitly cites the prior one as superseded.
+
+## 1. How to use this file
+
+- **Active decisions** live in §3 below, newest first.
+- **Reserved-but-unlocked** ranges (proposals from in-flight units) live in §2.
+- **Each entry** has: number, chunk/unit that locked it, lock date, headline, body, status.
+- **Status values:** `locked` | `superseded` | `reserved` | `withdrawn`.
+- **Supersession:** add a new entry pointing at the old one. The old entry's status flips to `superseded` and gains a "superseded by D###" annotation.
+
+## 2. Reserved (not yet locked)
+
+| Range | Reserved by unit | Notes |
+|---|---|---|
+| (none yet) | | |
+
+## 3. Active decisions
+
+[Newest first. Each entry:]
+
+### D001 — [Headline] *(locked: YYYY-MM-DD, unit: <unit-id>, status: locked)*
+
+[Body of the decision: what was decided, why, what alternatives were considered, what constraints it implies on future units.]
+
+**Implications:**
+- [Constraint or requirement #1]
+- [Constraint or requirement #2]
+
+---

@@ -1,0 +1,34 @@
+# Tiered safety posture. dualpass defaults to asking before any mutating action.
+# Autonomy is opt-in, per environment, per config line. Full bypass is deliberately
+# inconvenient.
+
+default_posture: ask              # ask | auto-accept-safe | plan-only | bypass
+
+mutating_actions_require_approval: true
+
+# Opt-in skips. ALL default to false (gate active). Setting any to true is your
+# explicit acknowledgment that you understand the safety implication.
+opt_in_skips:
+  DUALPASS_SKIP_PRE_CODE_INDEPENDENT_REVIEW: false
+  DUALPASS_SKIP_ARTIFACT_PREFLIGHT: false
+  DUALPASS_SKIP_VERIFY_ARTIFACT_CLAIMS: false
+  DUALPASS_SKIP_COUNT_REBASE: false
+
+# Regex blocklist for actions that are NEVER allowed, regardless of posture.
+# Tune for your repo; the defaults catch the most common foot-guns.
+forbidden_actions:
+  destructive_git:
+    - "push --force-with-lease.*main"
+    - "push --force-with-lease.*master"
+    - "reset --hard.*origin"
+    - "branch -D main"
+    - "branch -D master"
+  mass_delete:
+    - "rm -rf /"
+    - "rm -rf ~"
+    - "rm -rf \\$HOME"
+  credential_exfil:
+    - "cat.*\\.env"
+    - "cat.*credentials"
+
+audit_log: .dualpass-state/permission-audit.log
