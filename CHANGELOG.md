@@ -12,7 +12,7 @@ All notable changes to dualpass are documented here. Format follows [Keep a Chan
 - Three background watchers (research-complete → outline, prompt-drafts, handoff-finals) with §6.10-style PID-parsing fix and split-parent/lockfile guards
 - Mock provider for offline smoke tests
 - `dualpass init`, `run`, `status`, `retro`, `propose-dag` commands
-- One full example project: `examples/coding-agent/` (anonymized GrACE 7-stage pattern)
+- One full example project: `examples/coding-agent/` (the canonical 7-stage research → outline → spec → prompt → code → audit → handoff pattern)
 - Anthropic skill format for stage skills
 - Apache 2.0 license
 

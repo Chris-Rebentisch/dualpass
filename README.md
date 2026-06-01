@@ -36,7 +36,7 @@ Why cross-vendor matters: a single agent grading its own work is the most reliab
 
 Two audiences, one v1:
 
-- **Solo devs and small teams building multi-stage coding agents** — you want what GrACE-style staged pipelines give you (research → spec → code → audit → handoff), without inheriting somebody else's domain logic.
+- **Solo devs and small teams building multi-stage coding agents** — you want what a staged pipeline gives you (research → spec → code → audit → handoff), without inheriting somebody else's domain logic.
 - **Anyone running long-lived agentic workflows** — research, content production, ops runbooks. The stage chain is configurable; coding is just the default example.
 
 ## The nine components
@@ -97,4 +97,4 @@ Apache 2.0. See [LICENSE](LICENSE). Explicit patent grant included.
 
 ## Acknowledgments
 
-`dualpass` distills patterns shipped in the GrACE knowledge-graph project's pipeline automation, plus published guidance from Anthropic engineering (Claude Code, "Building Effective Agents," "Effective harnesses for long-running agents," "Harness design for long-running apps"), HumanLayer's [12-factor-agents](https://github.com/humanlayer/12-factor-agents) (Dex Horthy), Cognition Labs ("Don't Build Multi-Agents"), and Simon Willison's writing on tool-use security. Names credited where claims appear in the docs.
+`dualpass` distills patterns from published guidance by Anthropic engineering (Claude Code, "Building Effective Agents," "Effective harnesses for long-running agents," "Harness design for long-running apps"), HumanLayer's [12-factor-agents](https://github.com/humanlayer/12-factor-agents) (Dex Horthy), Cognition Labs ("Don't Build Multi-Agents"), and Simon Willison's writing on tool-use security, hardened against patterns learned running a production staged-pipeline build. Names credited where claims appear in the docs.

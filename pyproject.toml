@@ -5,7 +5,7 @@ description = "A reliability-first agent harness with cross-vendor independent r
 readme = "README.md"
 license = { text = "Apache-2.0" }
 requires-python = ">=3.12"
-authors = [{ name = "dualpass contributors" }]
+authors = [{ name = "Chris Rebentisch", email = "rbntsch@gmail.com" }]
 keywords = [
     "agent",
     "agent-harness",

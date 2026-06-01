@@ -178,9 +178,9 @@ dualpass is opinionated about safety: **default to asking. Make autonomy opt-in.
 default_posture: ask              # ask | auto-accept-safe | plan-only | bypass
 mutating_actions_require_approval: true
 opt_in_skips:
-  GRACE_SKIP_PRE_CODE_INDEPENDENT_REVIEW: false
-  GRACE_SKIP_ARTIFACT_PREFLIGHT: false
-  GRACE_SKIP_CUMULATIVE_COUNT_CHECK: false
+  DUALPASS_SKIP_PRE_CODE_INDEPENDENT_REVIEW: false
+  DUALPASS_SKIP_ARTIFACT_PREFLIGHT: false
+  DUALPASS_SKIP_CUMULATIVE_COUNT_CHECK: false
 ```
 
 The agent's CLI flags (e.g. `--dangerously-skip-permissions`, `--yolo`) are part of the `command` template in `config/agents.yaml`, not a separate config — the harness is honest about which flags it passes.

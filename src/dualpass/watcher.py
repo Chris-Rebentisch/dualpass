@@ -1,8 +1,8 @@
 """Background watchers — research-complete → outline, prompt-drafts, handoff-finals.
 
-Generalized from GrACE pipeline patterns. Ships with the §6.10 Fix 1 (whitespace-robust
-PID parsing per BashFAQ/001) and Fix 2 (pipeline-lock guard + splits_into frontmatter
-check) baked in.
+Ships with two retro-hardened fixes baked in: whitespace-robust PID parsing
+(per BashFAQ/001) and a pipeline-lock guard + `splits_into` frontmatter check
+that together prevent multi-owner stampede when a watcher fires.
 
 v0.1.0a0 status: stub.
 """
@@ -43,8 +43,8 @@ def status(name: WatcherName | None = None) -> list[WatcherState]:
 def seed_state_before_live(project_root: Path) -> dict[str, list[str]]:
     """Mark existing artifacts as seen before bringing watchers live.
 
-    Per the §16.1 GrACE retro lesson: without seeding, starting `--provider live` on a
-    stale state file stampedes the entire research/handoff backlog. Returns a report
-    of what was seeded per watcher.
+    Retro-hardened lesson: without seeding, starting `--provider live` on a stale
+    state file stampedes the entire research/handoff backlog. Returns a report of
+    what was seeded per watcher.
     """
     raise NotImplementedError("watcher.seed_state_before_live — landing in v0.3.0")
