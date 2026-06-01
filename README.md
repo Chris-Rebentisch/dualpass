@@ -1,12 +1,11 @@
 # dualpass
 
+[![PyPI](https://img.shields.io/pypi/v/dualpass.svg)](https://pypi.org/project/dualpass/)
 [![tests](https://github.com/Chris-Rebentisch/dualpass/actions/workflows/test.yml/badge.svg)](https://github.com/Chris-Rebentisch/dualpass/actions/workflows/test.yml)
+[![Release](https://img.shields.io/github/v/release/Chris-Rebentisch/dualpass.svg)](https://github.com/Chris-Rebentisch/dualpass/releases/latest)
+[![Downloads](https://static.pepy.tech/badge/dualpass/month)](https://pepy.tech/project/dualpass)
 [![license: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![python: 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
-<!-- enable once published to PyPI -->
-<!-- [![PyPI](https://img.shields.io/pypi/v/dualpass.svg)](https://pypi.org/project/dualpass/) -->
-<!-- [![Downloads](https://static.pepy.tech/badge/dualpass/month)](https://pepy.tech/project/dualpass) -->
-<!-- [![Release](https://img.shields.io/github/v/release/Chris-Rebentisch/dualpass.svg)](https://github.com/Chris-Rebentisch/dualpass/releases/latest) -->
 
 
 **One agent ships the work. A different vendor ships the review.**
@@ -62,24 +61,32 @@ Two audiences, one v1:
 
 ## Quick start
 
-Two install paths, pick whichever fits.
-
 ```bash
-# Option A — install from PyPI (when published)
 pip install dualpass
-dualpass init my-project
-cd my-project && dualpass run --unit demo-001 --provider mock --ignore-breakpoints
-
-# Option B — from source
-git clone https://github.com/Chris-Rebentisch/dualpass && cd dualpass
-pip install -e .   # requires Python 3.12 or 3.13
 dualpass init my-project
 cd my-project && dualpass run --unit demo-001 --provider mock --ignore-breakpoints
 ```
 
+Or, if you prefer `uv`:
+
+```bash
+uvx dualpass init my-project
+cd my-project && uvx dualpass run --unit demo-001 --provider mock --ignore-breakpoints
+```
+
 `--provider mock` runs the full stage chain end-to-end without calling any real LLM — useful for verifying the harness works before pointing it at `claude` + `cursor-agent` for live runs.
 
-See [docs/RUNBOOK.md](docs/RUNBOOK.md) for the full first-boot walkthrough.
+<details>
+<summary>Install from source instead</summary>
+
+```bash
+git clone https://github.com/Chris-Rebentisch/dualpass && cd dualpass
+pip install -e .   # Python 3.12 / 3.13. On 3.14 + macOS see CONTRIBUTING.md.
+```
+
+</details>
+
+See [docs/RUNBOOK.md](docs/RUNBOOK.md) for the full first-boot walkthrough, and [docs/WALKTHROUGH.md](docs/WALKTHROUGH.md) for an annotated end-to-end run.
 
 ## Why dualpass
 
